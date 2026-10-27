@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>ROAD RASH '96 — Classic Browser Edition</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="viewport">
+      <!-- 3D Papy3D-style WebGL Viewport (crisp 480p SVGA NearestFilter) -->
+      <canvas id="game-canvas"></canvas>
+
+      <!-- 1996 Sculpted Cockpit Fairing Dashboard HUD Canvas -->
+      <canvas id="hud-canvas"></canvas>
+
+      <!-- In-Race Top-Left Control Strip -->
+      <div id="race-top-bar" class="hidden">
+        <button id="btn-pause-race" class="hud-mini-btn" title="Pause (Esc)">⏸ PAUSE</button>
+        <button id="btn-cam-toggle" class="hud-mini-btn" title="Switch Camera / Dashboard (V)">🎥 CAM [V]</button>
+        <button id="btn-mirror-toggle" class="hud-mini-btn" title="Toggle Rearview Mirror (M)">🪞 MIRROR [M]</button>
+        <button id="btn-music-next" class="hud-mini-btn" title="Next Grunge Track (T)">🎸 SONG [T]</button>
+        <span class="hud-key-hint">WASD/Arrows • [SPACE/Z] Punch/Weapon • [X/C] Kick • [N] Nitro</span>
+      </div>
+
+      <!-- Mobile / Touch Controls Overlay -->
+      <div id="touch-controls" class="hidden">
+        <div class="touch-left">
+          <button class="touch-btn" data-control="left">◄</button>
+          <button class="touch-btn" data-control="right">►</button>
+        </div>
+        <div class="touch-right">
+          <div class="touch-combat-row">
+            <button class="touch-btn touch-punch" data-action="punch">PUNCH</button>
+            <button class="touch-btn touch-kick" data-action="kick">KICK</button>
+            <button class="touch-btn touch-nitro" data-action="nitro">N2O</button>
+          </div>
+          <div class="touch-pedal-row">
+            <button class="touch-btn touch-brake" data-control="brake">BRAKE</button>
+            <button class="touch-btn touch-gas" data-control="accel">GAS</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Menus & Career Screens Container -->
+      <div id="ui-layer"></div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
