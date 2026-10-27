@@ -868,7 +868,7 @@ export class CourseRenderer {
       });
     }
 
-    // 4. Downed Motorcycles (stunt launch ramps!)
+    // 4. Downed Motorcycles lying on asphalt
     for (const db of sim.downedBikes) {
       if (!db.active) continue;
       const proj = this.projectWorldPoint(db.sample, db.lat, 0);
@@ -985,9 +985,9 @@ export class CourseRenderer {
     if (!peds || !peds.length) return;
     const pDesc = peds[ped.type % peds.length] || peds[0];
 
-    const animIdx = ped.state === 'hit' ? 3 : ped.moving ? 0 : 1;
+    const animIdx = ped.state === 'down' || ped.state === 'hit' ? 3 : ped.moving ? 0 : 1;
     const seq = pDesc.anims[animIdx] || pDesc.anims[0] || [];
-    const step = seq.length ? seq[ped.animStep % seq.length] : null;
+    const step = seq.length ? seq[Math.min(seq.length - 1, ped.animStep)] : null;
 
     let fMeta = pDesc.frames[0];
     let mirror = ped.vx < 0;
@@ -1007,16 +1007,8 @@ export class CourseRenderer {
     const dh = nh * pedScale;
     if (dw < 1.5 || dh < 1.5) return;
 
+    // Grounded pedestrian rendering (walk, stand, or 6-frame knockdown onto pavement)
     const clipY = Math.min(404, proj.clipY + 4);
-    if (ped.state === 'hit') {
-      ctx2d.save();
-      ctx2d.translate(proj.sx, proj.sy - dh * 0.5);
-      ctx2d.rotate(ped.spinAngle || 0);
-      ctx2d.drawImage(img, -dw * 0.5, -dh * 0.5, dw, dh);
-      ctx2d.restore();
-      return;
-    }
-
     const dx = mirror ? proj.sx - (nw - ox) * pedScale : proj.sx - ox * pedScale;
     const dy = proj.sy - oy * pedScale;
     this.drawClippedCanvas(ctx2d, img, dx, dy, dw, dh, mirror, clipY);
@@ -1129,7 +1121,7 @@ export class CourseRenderer {
     if (dw < 2 || dh < 2) return;
 
     const dx = proj.sx - dw * 0.5;
-    const dy = proj.sy - dh * 0.95;
+    const dy = proj.sy - dh * (r.state === 'crashing' ? 0.88 : 0.95);
 
     const shImg = this.assets.getRiderShadowCanvas(frameIdx);
     if (shImg && proj.sy < clipY) {

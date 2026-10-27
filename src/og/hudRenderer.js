@@ -115,9 +115,15 @@ export class HudRenderer {
       badgeX += 60;
     }
     if (p.nitroCharges > 0 || p.nitroTicks > 0) {
-      ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.88)' : 'rgba(15, 50, 100, 0.76)';
-      ctx.fillRect(536, 36, 96, 22);
-      this.drawSmallText(ctx, `NITRO: ${p.nitroCharges}`, 544, 39, '#99eeff');
+      ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.90)' : 'rgba(15, 50, 100, 0.80)';
+      ctx.fillRect(516, 36, 116, 22);
+      this.drawSmallText(
+        ctx,
+        p.nitroTicks > 0 ? `BOOST! (${p.nitroCharges})` : `NITRO [N]: ${p.nitroCharges}`,
+        523,
+        39,
+        p.nitroTicks > 0 ? '#ffffff' : '#99eeff'
+      );
     }
 
     // Police siren alert pill on top-right when cop is pursuing

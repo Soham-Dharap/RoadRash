@@ -4,7 +4,8 @@
 
 import { MUSIC_TRACKS } from './audioEngine.js';
 
-const SAVE_STORAGE_KEY = 'roadrash_96_biggame_v2';
+const SAVE_STORAGE_KEY = 'roadrash_96_biggame_v3';
+const INITIAL_MILLION_CASH = 1000000;
 
 export const COURSE_DEFS = [
   { id: 0, key: 'CITY', post: 'city', qpost: 'qcity', nameSlot: 16, descSlot: 21 },
@@ -63,6 +64,7 @@ export class FrontendUI {
 
     this.thrashLevel = 0; // 0..4 -> Level 1..5
     this.thrashCourse = 0; // 0..4
+    this.thrashBikeSlot = 11; // Default Thrash bike unlocked (Diablo Vipera, or cycle all 15 w/ TAB!)
 
     this.career = this.loadCareer() || this.createCareer(0);
 
@@ -84,16 +86,14 @@ export class FrontendUI {
 
   createCareer(charIdx = 0) {
     const ch = CHAR_DEFS[charIdx] || CHAR_DEFS[0];
-    const cashArr =
-      this.assets.frontend?.career?.startCash || [500, 200, 500, 1000, 400, 750, 800, 600, 500];
-    const cash = cashArr[ch.cashIdx] ?? 500;
     return {
       active: false,
       charIdx: ch.id,
       playerName: this.assets.str(ch.nameSlot) || 'Axle',
       level: 0,
       bikeId: ch.startBike,
-      cash,
+      ownedBikes: [ch.startBike],
+      cash: INITIAL_MILLION_CASH,
       qualified: [false, false, false, false, false],
       racesRun: 0,
       wins: 0
@@ -106,6 +106,9 @@ export class FrontendUI {
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.cash === 'number' && Array.isArray(parsed.qualified)) {
+        if (!Array.isArray(parsed.ownedBikes)) {
+          parsed.ownedBikes = [parsed.bikeId ?? 0];
+        }
         return parsed;
       }
     } catch {
@@ -240,7 +243,7 @@ export class FrontendUI {
           {
             rect: [320, 420, 160, 60],
             label: 'How To Rash',
-            desc: 'View keyboard controls & OG Road Rash combat mechanics: punches, timed weapon snatching, lateral boot-kick shoves, pedestrians & downed-bike ramps.',
+            desc: 'View controls & OG Road Rash combat mechanics + Nitro Speed Boost on ALL bikes & $1,000,000 Bankroll unlocking all 15 motorcycles!',
             action: () => {
               this.returnScreen = 'main';
               this.go('help', 0);
@@ -267,13 +270,13 @@ export class FrontendUI {
         titleFontSize: 48,
         customBody: [
           'RIDE & STEER: Arrow Keys or W/A/S/D  •  UP/W = Throttle, DOWN/S = Brakes, LEFT/RIGHT = Lean.',
+          'NITRO BOOST (ALL 15 BIKES!): Press N, B, CTRL or Double-Tap UP/W to fire Nitro Speed Boost!',
+          '$1,000,000 BANKROLL: All 15 Rat, Sport & Super bikes unlocked! Buy/switch at Olley\'s or press TAB in Thrash!',
           'SMART MELEE (SPACE or ENTER): Swings Fist, Club, or Chain toward the nearest rival beside you!',
           'DIRECTIONAL SWINGS (Z = Left, C = Right): Aim punches, clubs & chains explicitly left or right.',
           'WEAPON SNATCHING: Land a bare-knuckle punch right while an armed rival winds up to steal their Club or Chain!',
           'BOOT KICK SHOVE (X or SHIFT): Physically shoves rival bikes sideways across lanes into oncoming cars & walls!',
-          'PEDESTRIANS & FALLEN RIDERS: Clip jaywalkers or crashed bikers sprinting on foot back to their bikes!',
-          'DOWNED-BIKE RAMPS: Crashed motorcycles on the road act as stunt ramps — hit straight to launch airborne!',
-          'SUPERBIKE NITRO (N or CTRL): Fires Nitro boost on Nitro-equipped bikes!  •  F10 = Toggle Cockpit HUD.'
+          'PEDESTRIANS & FALLEN BIKES: Clip jaywalkers on the sidewalk & ride upright over downed bikes!  •  F10 = HUD.'
         ],
         items: [
           {
@@ -295,14 +298,12 @@ export class FrontendUI {
       const ft = Math.floor(st.height / 12);
       const inch = st.height % 12;
       const bikeName = S(bikeDefById(ch.startBike).nameSlot);
-      const cashArr =
-        this.assets.frontend?.career?.startCash || [500, 200, 500, 1000, 400, 750, 800, 600, 500];
-      const cash = cashArr[ch.cashIdx] ?? 500;
+      const cash = INITIAL_MILLION_CASH;
       const rawBio = S(ch.bioSlot)
         .replace('%s', `${ft}'${inch}"`)
         .replace('%s', `${st.weight} lbs`)
         .replace('%s', bikeName)
-        .replace('%d', String(cash));
+        .replace('%d', cash.toLocaleString());
 
       const charRects = [
         [0, 402, 213, 26],
@@ -527,18 +528,25 @@ export class FrontendUI {
         [213, 450, 213, 30],
         [426, 420, 214, 30]
       ];
+      const ownedSet = new Set(this.career.ownedBikes || [this.career.bikeId]);
       const buyingPower = this.career.cash + this.tradeInValue();
       const priceStr = focusedBike
-        ? `${S(focusedBike.nameSlot)} — $${this.bikePrice(focusedBike.bikeId).toLocaleString()}${focusedBike.bikeId === this.career.bikeId ? ' (OWNED)' : ''}`
-        : 'Select a motorcycle to inspect full specs & buy';
+        ? `${S(focusedBike.nameSlot)} [NITRO] — $${this.bikePrice(focusedBike.bikeId).toLocaleString()}${
+            focusedBike.bikeId === this.career.bikeId
+              ? ' (RIDING)'
+              : ownedSet.has(focusedBike.bikeId)
+                ? ' (OWNED)'
+                : ' (UNLOCKED)'
+          }`
+        : 'All 15 bikes unlocked w/ $1,000,000 bankroll — pick any motorcycle to inspect & ride';
 
       return {
         bg,
-        statusBanner: `${priceStr}  •  Cash+Trade: $${buyingPower.toLocaleString()}`,
+        statusBanner: `${priceStr}  •  Cash: $${this.career.cash.toLocaleString()} (w/ Trade: $${buyingPower.toLocaleString()})`,
         items: [
           ...bikes.map((b, idx) => ({
             rect: showroomRects[idx],
-            label: `${S(b.shortSlot)} ${S(b.subSlot)}${b.bikeId === this.career.bikeId ? ' ★' : ''}`,
+            label: `${S(b.shortSlot)} ${S(b.subSlot)}${b.bikeId === this.career.bikeId ? ' ★' : ownedSet.has(b.bikeId) ? ' ✓' : ''}`,
             desc: '',
             action: () => {
               this.inspectSlot = b.slot;
@@ -559,14 +567,14 @@ export class FrontendUI {
     // Screen 24: Bike Close-Up Inspect & Buy
     if (this.screen === 'bike_inspect') {
       const b = SHOWROOM_BIKES[this.inspectSlot] || SHOWROOM_BIKES[0];
+      const ownedSet = new Set(this.career.ownedBikes || [this.career.bikeId]);
+      const alreadyOwned = ownedSet.has(b.bikeId);
       const price = this.bikePrice(b.bikeId);
-      const netCost = Math.max(0, price - this.tradeInValue());
-      const raw = this.assets.frontend?.bikes?.[b.bikeId];
-      const hasNitro = raw && raw[86] > 0;
+      const netCost = alreadyOwned ? 0 : Math.max(0, price - this.tradeInValue());
 
       return {
         bg: `bikes/${b.cls}/${b.slug}.jpg`,
-        statusBanner: `${S(b.nameSlot)}${hasNitro ? ' [NITRO]' : ''}  •  Price: $${price.toLocaleString()}  •  Net w/ Trade: $${netCost.toLocaleString()}`,
+        statusBanner: `${S(b.nameSlot)} [NITRO BOOST]  •  ${alreadyOwned ? 'OWNED IN GARAGE ($0 Switch)' : `Price: $${price.toLocaleString()} (Net: $${netCost.toLocaleString()})`}  •  Cash: $${this.career.cash.toLocaleString()}`,
         descRect: [16, 336, 608, 76],
         descFontSize: 18,
         extraDarkRects: [
@@ -579,7 +587,9 @@ export class FrontendUI {
         items: [
           {
             rect: [80, 450, 200, 30],
-            label: `${S(217) || 'Buy'} ($${netCost.toLocaleString()})`,
+            label: alreadyOwned
+              ? `Ride Now ($0)`
+              : `${S(217) || 'Buy'} ($${netCost.toLocaleString()})`,
             desc: S(b.descSlot),
             action: () => this.tryBuyBike(b)
           },
@@ -641,10 +651,14 @@ export class FrontendUI {
             const qual = isBig && this.career.qualified[c.id];
             const miles = this.courseMiles(level, c.id);
             const rawDesc = S(c.descSlot).split('Length')[0].replace(/\n+/g, ' ').trim();
+            const thrashBikeDef = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
+            const activeBikeName = isBig
+              ? S(bikeDefById(this.career.bikeId).nameSlot)
+              : S(thrashBikeDef.nameSlot);
             return {
               rect: trackRects[idx],
               label: `${S(c.nameSlot)}${qual ? ' ★' : ''}`,
-              desc: `${S(c.nameSlot)}\nLevel ${level + 1}${qual ? ' (QUALIFIED)' : ''}\n\n${rawDesc}\n\nLength: ${miles} ${S(27)}`,
+              desc: `${S(c.nameSlot)}\nLevel ${level + 1}${qual ? ' (QUALIFIED)' : ''}\nBike: ${activeBikeName} [NITRO]${!isBig ? ' (TAB to switch)' : ''}\n\n${rawDesc}\n\nLength: ${miles} ${S(27)}`,
               action: () => {
                 if (!isBig) this.thrashCourse = c.id;
                 this.launchRace(c.id);
@@ -656,7 +670,7 @@ export class FrontendUI {
             label: isBig ? S(48) || 'Der Panzer Klub' : S(86) || 'Main Menu',
             desc: isBig
               ? 'Return to Der Panzer Klub.'
-              : `Thrash Level ${level + 1}.\nReturn to Main Menu or visit Restroom to change Thrash Level.`,
+              : `Thrash Level ${level + 1} • Press TAB to pick any of the 15 Unlocked Bikes!\nReturn to Main Menu or visit Restroom.`,
             action: () => {
               if (isBig) this.go('panzer', 2);
               else this.go('main', 0);
@@ -670,14 +684,15 @@ export class FrontendUI {
     if (this.screen === 'restroom') {
       const trackName = MUSIC_TRACKS[this.audio.currentTrackIndex] || 'GRUNGE1';
       const alias = this.career.playerName || 'Axle';
+      const thrashBike = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
       return {
         bg: this.restroomBg,
-        titleRect: [0, 14, 640, 68],
+        titleRect: [0, 12, 640, 64],
         title: S(6) || 'Restroom',
-        titleFontSize: 54,
+        titleFontSize: 52,
         items: [
           {
-            rect: [0, 106, 640, 34],
+            rect: [0, 92, 640, 32],
             centered: true,
             label: `Thrash Level: Level ${this.thrashLevel + 1}`,
             desc: '',
@@ -686,7 +701,16 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 148, 640, 34],
+            rect: [0, 130, 640, 32],
+            centered: true,
+            label: `Thrash Bike (All 15 Unlocked): ${S(thrashBike.nameSlot)}`,
+            desc: '',
+            action: () => {
+              this.thrashBikeSlot = (this.thrashBikeSlot + 1) % SHOWROOM_BIKES.length;
+            }
+          },
+          {
+            rect: [0, 168, 640, 32],
             centered: true,
             label: this.editingName
               ? `Player Name: ${alias}_  (Type & Enter)`
@@ -698,7 +722,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 190, 640, 34],
+            rect: [0, 206, 640, 32],
             centered: true,
             label: `Jukebox Track: ${trackName}`,
             desc: '',
@@ -707,7 +731,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 232, 640, 34],
+            rect: [0, 244, 640, 32],
             centered: true,
             label: `Rock Music: ${this.audio.musicEnabled ? 'ON' : 'OFF'}`,
             desc: '',
@@ -716,7 +740,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 274, 640, 34],
+            rect: [0, 282, 640, 32],
             centered: true,
             label: `Sound Effects: ${this.audio.sfxEnabled ? 'ON' : 'OFF'}`,
             desc: '',
@@ -725,9 +749,9 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 316, 640, 34],
+            rect: [0, 320, 640, 32],
             centered: true,
-            label: 'Start New Big Game Career',
+            label: 'Start New Big Game Career ($1,000,000)',
             desc: '',
             action: () => {
               this.resetCareer();
@@ -736,7 +760,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 358, 640, 34],
+            rect: [0, 358, 640, 32],
             centered: true,
             label: 'Controls & Combat Guide',
             desc: '',
@@ -839,13 +863,17 @@ export class FrontendUI {
     const S = (id) => this.assets.str(id);
     if (b.bikeId === this.career.bikeId) {
       this.noticeTitle = S(187) || 'WAKE UP!';
-      this.noticeBody = S(188) || 'You already own this bike.';
+      this.noticeBody = S(188) || 'You are already riding this bike.';
       this.noticeNext = 'showroom';
       this.go('notice', 0);
       return;
     }
+    if (!Array.isArray(this.career.ownedBikes)) {
+      this.career.ownedBikes = [this.career.bikeId];
+    }
+    const alreadyOwned = this.career.ownedBikes.includes(b.bikeId);
     const price = this.bikePrice(b.bikeId);
-    const netCost = Math.max(0, price - this.tradeInValue());
+    const netCost = alreadyOwned ? 0 : Math.max(0, price - this.tradeInValue());
     if (this.career.cash < netCost) {
       this.noticeTitle = S(185) || 'IN YOUR DREAMS!';
       this.noticeBody = `${S(186)}\nNeed $${netCost.toLocaleString()} after trade-in (you have $${this.career.cash.toLocaleString()}).`;
@@ -855,10 +883,13 @@ export class FrontendUI {
     }
     this.career.cash -= netCost;
     this.career.bikeId = b.bikeId;
+    if (!alreadyOwned) {
+      this.career.ownedBikes.push(b.bikeId);
+    }
     this.saveCareer();
     this.audio.playSfx('m_yeah', { volume: 0.9 });
     this.noticeTitle = S(189) || 'CONGRATULATIONS!';
-    this.noticeBody = `${S(190)}\nNew Ride: ${S(b.nameSlot)} • Cash Left: $${this.career.cash.toLocaleString()}`;
+    this.noticeBody = `${S(190)}\nNew Ride: ${S(b.nameSlot)} [NITRO BOOST] • Cash Left: $${this.career.cash.toLocaleString()}`;
     this.noticeNext = 'street';
     this.go('notice', 0);
   }
@@ -869,8 +900,8 @@ export class FrontendUI {
     const level = isBig ? this.career.level : this.thrashLevel;
     const ch = CHAR_DEFS[isBig ? this.career.charIdx : 0] || CHAR_DEFS[0];
 
-    const lvlBikes = [1, 0, 12, 6, 9];
-    const bikeId = isBig ? this.career.bikeId : lvlBikes[level] ?? 1;
+    const thrashBikeDef = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
+    const bikeId = isBig ? this.career.bikeId : thrashBikeDef.bikeId;
     const playerName = isBig ? this.career.playerName : this.career.playerName || this.assets.str(ch.nameSlot) || 'Axle';
 
     this.loadingInfo = {
@@ -1068,6 +1099,15 @@ export class FrontendUI {
     const spec = this.currentMenuSpec();
     const items = spec.items || [];
     if (!items.length) return;
+
+    if (e.code === 'Tab' && this.screen === 'thrash_tracks') {
+      const step = e.shiftKey ? -1 : 1;
+      this.thrashBikeSlot =
+        (this.thrashBikeSlot + step + SHOWROOM_BIKES.length) % SHOWROOM_BIKES.length;
+      this.audio.playSfx('punchlig', { volume: 0.55, rate: 1.15 });
+      e.preventDefault();
+      return;
+    }
 
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
       this.moveFocusDirectional(-1, 0, items);

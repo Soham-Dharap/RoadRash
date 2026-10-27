@@ -81,7 +81,7 @@ function setKeyFlag(code, down) {
   if (code === 'ArrowUp' || code === 'KeyW') {
     if (down && !inputState.gas && appState === 'racing' && raceSim && !raceSim.paused) {
       const now = performance.now();
-      if (now - lastGasTapMs < 250) {
+      if (now - lastGasTapMs < 300) {
         raceSim.triggerNitro();
       }
       lastGasTapMs = now;
@@ -175,7 +175,12 @@ window.addEventListener('keydown', (e) => {
         // Lateral Boot-Kick Shove across lanes!
         raceSim.triggerAttack('kick', inputState);
         e.preventDefault();
-      } else if (e.code === 'KeyN' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
+      } else if (
+        e.code === 'KeyN' ||
+        e.code === 'KeyB' ||
+        e.code === 'ControlLeft' ||
+        e.code === 'ControlRight'
+      ) {
         raceSim.triggerNitro();
         e.preventDefault();
       } else if (e.code === 'F10' || e.code === 'KeyH') {

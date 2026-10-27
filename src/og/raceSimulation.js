@@ -1,9 +1,9 @@
 // Authentic 1996 Road Rash 60Hz Race Simulation Engine
 // Exact ROADRASH.EXE speed-to-sample scale (0.1526 samples/tick at 100 MPH, 33 samples = 0.1 mi),
-// exact race.cpp centrifugal curve sweep (-bend * ds * 1.5625), 6-speed gearbox & RPM needle,
-// smart/directional melee combat (punches, clubs, chains, timed weapon snatching),
-// lateral boot-kick shoves into traffic/walls, hittable pedestrians & sprinting crashed riders,
-// motorcycle cops (sirens, nightstick duels & busts), Superbike Nitro, and downed-bike stunt ramps!
+// exact race.cpp centrifugal curve sweep, grounded hill crests & fixed camera height (no fake jumps!),
+// 6-speed gearbox & RPM needle, smart/directional melee combat (punches, clubs, chains, weapon snatching),
+// lateral boot-kick shoves into traffic/walls, grounded pedestrian knockdowns & HIBOB crash animations,
+// exact race.cpp iclass==0 downed-bike ride-over, motorcycle cops, and Nitro Speed Boost on ALL 15 bikes!
 
 const RIVAL_ROSTER = [
   { name: 'Biff', aggr: 0.86, weapon: 1, bikeId: 3, female: false },
@@ -75,10 +75,11 @@ export class RaceSimulation {
     this.initPolice();
   }
 
-  bikeStats(bikeId) {
+  bikeStats(bikeId, isPlayer = false) {
     const raw = this.assets.frontend?.bikes?.[bikeId];
     const cls = bikeId < 5 ? 'rat' : bikeId < 10 ? 'super' : 'sport';
-    const hasNitro = raw ? raw[86] > 0 : cls === 'super';
+    // Custom feature: Nitro / Speed Boost enabled on ALL 15 bikes for the player!
+    const hasNitro = isPlayer ? true : raw ? raw[86] > 0 : cls === 'super';
     const hp = raw ? (raw[24] | (raw[25] << 8)) : 80;
 
     const topMphBase =
@@ -89,7 +90,8 @@ export class RaceSimulation {
     return {
       cls,
       hasNitro,
-      nitroCharges: hasNitro ? 6 : 0,
+      nitroCharges: isPlayer ? 8 : hasNitro ? 6 : 0,
+      maxNitroCharges: isPlayer ? 8 : hasNitro ? 6 : 0,
       topMph: topMphBase + this.config.level * 5,
       accel: accelBase + this.config.level * 0.05,
       steerRate: steerBase,
@@ -98,7 +100,7 @@ export class RaceSimulation {
   }
 
   initRiders() {
-    const pStats = this.bikeStats(this.config.bikeId);
+    const pStats = this.bikeStats(this.config.bikeId, true);
     this.player = this.makeRider({
       id: 0,
       isPlayer: true,
@@ -118,7 +120,7 @@ export class RaceSimulation {
     for (let i = 0; i < 14; i++) {
       const rdef = RIVAL_ROSTER[i];
       const lvlBike = Math.min(14, (rdef.bikeId + this.config.level * 2) % 15);
-      const st = this.bikeStats(lvlBike);
+      const st = this.bikeStats(lvlBike, false);
       const row = Math.floor((i + 1) / 2);
       const col = (i + 1) % 2;
 
@@ -163,9 +165,12 @@ export class RaceSimulation {
       bikeCond: opts.stats.maxBikeCond,
       maxBikeCond: opts.stats.maxBikeCond,
       nitroCharges: opts.stats.nitroCharges,
+      maxNitroCharges: opts.stats.maxNitroCharges || opts.stats.nitroCharges,
+      nitroRechargeTicks: 0,
       nitroTicks: 0,
       state: 'riding', // 'riding' | 'crashing' | 'running' | 'busted' | 'wrecked'
       stateTimer: 0,
+      crashTotalTicks: 0,
       downedBikeRef: null,
       animId: 2,
       animStep: 0,
@@ -326,11 +331,11 @@ export class RaceSimulation {
 
   triggerNitro() {
     const p = this.player;
-    if (!p || p.state !== 'riding') return;
+    if (!p || p.state !== 'riding' || this.countdownTicks > 0) return;
     if (p.nitroCharges > 0 && p.nitroTicks <= 0) {
       p.nitroCharges -= 1;
-      p.nitroTicks = 135;
-      this.audio.playSfx('m_yeah', { volume: 0.72 });
+      p.nitroTicks = 140;
+      this.audio.playSfx(p.female ? 'f_yeah' : 'm_yeah', { volume: 0.76 });
       this.showBanner(`NITRO BOOST! (${p.nitroCharges} LEFT)`, '#66e6ff', 65);
     }
   }
@@ -527,15 +532,21 @@ export class RaceSimulation {
 
   integrateMotorcyclePhysics(r, ctrl, topMul = 1.0) {
     const smp = this.sampleInfoAt(r.sample);
-    const nextSmp = this.sampleInfoAt(r.sample + 1);
 
     if (r.nitroTicks > 0) r.nitroTicks -= 1;
+    if (r.isPlayer && r.nitroTicks <= 0 && r.nitroCharges < r.maxNitroCharges) {
+      r.nitroRechargeTicks = (r.nitroRechargeTicks || 0) + 1;
+      if (r.nitroRechargeTicks >= 1080) {
+        r.nitroRechargeTicks = 0;
+        r.nitroCharges += 1;
+      }
+    }
     if (r.hitSparkTimer > 0) r.hitSparkTimer -= 1;
     if (r.staggerTimer <= 0 && r.stamina < r.maxStamina) {
       r.stamina = Math.min(r.maxStamina, r.stamina + (r.isPlayer ? 0.04 : 0.015));
     }
 
-    const nitroBoost = r.nitroTicks > 0 ? 1.26 : 1.0;
+    const nitroBoost = r.nitroTicks > 0 ? 1.28 : 1.0;
     const maxMph = r.stats.topMph * topMul * nitroBoost;
 
     const offRoadLeft = r.lat < -smp.left;
@@ -547,7 +558,7 @@ export class RaceSimulation {
     if (ctrl.throttle && r.airY <= 1) {
       const ratio = r.speedMph / Math.max(1, maxMph);
       const torqueCurve = Math.max(0.16, 1.08 - ratio * 0.82);
-      r.speedMph += r.stats.accel * torqueCurve * (r.nitroTicks > 0 ? 1.85 : 1.0);
+      r.speedMph += r.stats.accel * torqueCurve * (r.nitroTicks > 0 ? 2.05 : 1.0);
     } else {
       r.speedMph -= 0.19 + (r.speedMph / 190) * 0.24;
     }
@@ -572,10 +583,7 @@ export class RaceSimulation {
     const gLow = GEAR_THRESHOLDS[newGear - 1];
     const gHigh = GEAR_THRESHOLDS[newGear];
     const inGearFrac = Math.max(0, Math.min(1, (speedRatio - gLow) / Math.max(0.12, gHigh - gLow)));
-    const targetRpm =
-      r.airY > 4 && ctrl.throttle
-        ? 0.96
-        : 0.20 + inGearFrac * 0.72 + (r.nitroTicks > 0 ? 0.08 : 0);
+    const targetRpm = 0.20 + inGearFrac * 0.72 + (r.nitroTicks > 0 ? 0.08 : 0);
     r.rpmNorm += (targetRpm - r.rpmNorm) * 0.24;
 
     // 3. Progressive Lean & Exact race.cpp Centrifugal Curve Sweep!
@@ -598,28 +606,16 @@ export class RaceSimulation {
     r.latVel = r.latVel * 0.78 + leanLatDrive * 0.30;
     r.lat += r.latVel + r.shoveVel + centrifugalPush;
 
-    // 4. Advance Forward & Hilltop Air Launches!
+    // 4. Advance Forward Grounded on Road (exact ROADRASH.EXE: no fake hilltop launches!)
     r.sample += ds;
-    const slopeDrop = smp.rise - nextSmp.rise;
-    if (r.airY <= 0 && slopeDrop > 30 && r.speedMph > 68) {
-      r.airVel = Math.min(18, (slopeDrop - 24) * 0.16 * (r.speedMph / 95));
-      r.airY = 2;
-    }
 
+    // Settle any tiny tire bump (e.g. riding over a downed bike) cleanly back to asphalt
     if (r.airY > 0 || r.airVel > 0) {
       r.airY += r.airVel;
-      r.airVel -= 0.78;
+      r.airVel -= 0.85;
       if (r.airY <= 0) {
-        const hardImpact = r.airVel < -11;
         r.airY = 0;
         r.airVel = 0;
-        if (r.isPlayer) {
-          this.audio.playSfx('bounce', { volume: hardImpact ? 0.85 : 0.62 });
-        }
-        if (hardImpact && Math.abs(r.lean) > 0.82) {
-          this.triggerCrash(r, r.speedMph * 0.65, r.lean > 0 ? 1 : -1, 'BAD LANDING!');
-          return;
-        }
       }
     }
 
@@ -893,19 +889,22 @@ export class RaceSimulation {
       }
     }
 
-    // 2. Hittable Jaywalking & Shoulder Pedestrians!
+    // 2. Hittable Jaywalking & Shoulder Pedestrians (exact race.cpp type 0x20: grounded knockdown!)
     const pedsMeta = this.assets.worldMeta?.pedestrians || [];
     for (const ped of this.pedestrians) {
       if (!ped.active || ped.state !== 'walk') continue;
       const ds = Math.abs(ped.sample - r.sample);
       const dLat = Math.abs(ped.lat - r.lat);
       if (ds < 0.95 && dLat < 64 && r.airY < 26) {
-        ped.state = 'hit';
-        ped.airVel = 10.0 + r.speedMph * 0.055;
-        ped.airY = 4;
-        ped.vx = (ped.lat >= r.lat ? 1 : -1) * 5.6;
-        r.speedMph *= 0.91;
-        r.latVel += (r.lat < ped.lat ? -1 : 1) * 3.0;
+        ped.state = 'down';
+        ped.airY = 0;
+        ped.airVel = 0;
+        ped.animStep = 0;
+        ped.animTick = 0;
+        ped.downTimer = 150;
+        ped.vx = (ped.lat >= r.lat ? 1 : -1) * 4.2;
+        r.speedMph *= 0.92;
+        r.latVel += (r.lat < ped.lat ? -1 : 1) * 2.8;
         r.staggerTimer = 8;
 
         if (r.isPlayer) {
@@ -921,18 +920,22 @@ export class RaceSimulation {
       }
     }
 
-    // 3. Hittable Sprinting Crashed Riders running on foot back to their bikes!
+    // 3. Hittable Sprinting Crashed Riders running on foot back to their bikes (grounded knockdown!)
     for (const other of this.riders) {
       if (other === r || other.state !== 'running') continue;
       const ds = Math.abs(other.sample - r.sample);
       const dLat = Math.abs(other.lat - r.lat);
       if (ds < 0.95 && dLat < 60 && r.airY < 26) {
         other.state = 'crashing';
-        other.stateTimer = 46;
-        other.airVel = 9.2;
-        other.airY = 5;
-        other.speedMph = r.speedMph * 0.36;
-        r.speedMph *= 0.92;
+        other.stateTimer = 48;
+        other.crashTotalTicks = 48;
+        other.airVel = 0;
+        other.airY = 0;
+        other.animId = 28;
+        other.animStep = 0;
+        other.latVel = (other.lat >= r.lat ? 1 : -1) * 5.0;
+        other.speedMph = r.speedMph * 0.32;
+        r.speedMph *= 0.93;
         if (r.isPlayer || other.isPlayer) {
           this.audio.playSfx('punchhea', { volume: 0.82 });
           this.playGrunt(other.female);
@@ -941,19 +944,29 @@ export class RaceSimulation {
       }
     }
 
-    // 4. Downed Motorcycles Lying on Pavement -> PHYSICAL STUNT LAUNCH RAMPS!
+    // 4. Downed Motorcycles on Pavement (exact ROADRASH.EXE race.cpp::0x004049c0 iclass == 0!)
+    // Slow bikes nudge aside; fast upright bikes ride over with a small tire bump (NO fake moon-launch!);
+    // heavily leaned bikes wipe out!
     for (const db of this.downedBikes) {
-      if (!db.active || db.ownerId === r.id) continue;
+      if (!db.active || db.ownerId === r.id || (db.hitCooldown || 0) > 0) continue;
       const ds = Math.abs(db.sample - r.sample);
       const dLat = Math.abs(db.lat - r.lat);
-      if (ds < 0.98 && dLat < 68 && r.airY < 14) {
-        if (Math.abs(r.lean) < 0.68 && r.speedMph > 22) {
-          r.airVel = 14.0 + r.speedMph * 0.088;
-          r.airY = 8;
-          db.spinStep = (db.spinStep + 3) % 8;
+      if (ds < 0.92 && dLat < 62 && r.airY < 10) {
+        db.hitCooldown = 18;
+        if (r.speedMph <= 25) {
+          const pushDir = r.lat < db.lat ? -1 : 1;
+          r.latVel += pushDir * 4.5;
+          db.lat -= pushDir * 10;
+          if (r.isPlayer) this.audio.playSfx('crashlit', { volume: 0.52 });
+        } else if (Math.abs(r.lean) < 0.68) {
+          // Small realistic OG tire hop over the downed bike frame — stays planted right on the road!
+          r.airVel = 3.2;
+          r.airY = 2;
+          r.speedMph *= 0.94;
+          r.staggerTimer = Math.max(r.staggerTimer, 6);
+          db.spinStep = (db.spinStep + 2) % 8;
           if (r.isPlayer) {
-            this.audio.playSfx('bounce', { volume: 0.92 });
-            this.showBanner('BIKE RAMP JUMP!', '#66e6ff', 58);
+            this.audio.playSfx('bounce', { volume: 0.78 });
           }
         } else {
           this.triggerCrash(r, r.speedMph * 0.72, r.lean >= 0 ? 1 : -1, 'PILED UP!');
@@ -965,7 +978,7 @@ export class RaceSimulation {
     return false;
   }
 
-  // ==================== CRASH, DETACHED BIKE SLIDE & ON-FOOT SPRINT ====================
+  // ==================== GROUNDED HIBOB CRASH, BIKE SLIDE & ON-FOOT SPRINT ====================
 
   triggerCrash(r, severityMph, sideDir, reason = '') {
     if (r.state !== 'riding') return;
@@ -991,18 +1004,23 @@ export class RaceSimulation {
       lat: r.lat - sideDir * 28,
       mph: Math.min(105, r.speedMph * 0.86),
       latVel: -sideDir * 4.2,
-      spinStep: 0
+      spinStep: 0,
+      hitCooldown: 0
     };
     this.downedBikes.push(db);
     r.downedBikeRef = db;
 
+    // Grounded HIBOB crash: anim[28] tumble -> anim[29] slide -> anim[36] stand-up -> anim[38] sprint
     r.state = 'crashing';
-    r.stateTimer = 58;
-    r.airVel = Math.min(14, 5.5 + severityMph * 0.065);
-    r.airY = 4;
-    r.latVel = sideDir * 6.5;
-    r.speedMph = Math.min(92, r.speedMph * 0.74);
-    r.animId = 0;
+    r.crashTotalTicks = 66;
+    r.stateTimer = 66;
+    r.airVel = 0;
+    r.airY = 0;
+    r.latVel = sideDir * 6.0;
+    r.speedMph = Math.min(88, r.speedMph * 0.72);
+    r.animId = 28;
+    r.animStep = 0;
+    r.animTick = 0;
   }
 
   stepNonRidingState(r) {
@@ -1010,19 +1028,34 @@ export class RaceSimulation {
 
     if (r.state === 'crashing') {
       r.stateTimer -= 1;
+      r.airY = 0;
+      r.airVel = 0;
       r.sample += r.speedMph * 0.0014;
-      r.speedMph *= 0.92;
+      r.speedMph *= 0.915;
       r.lat += r.latVel;
       r.latVel *= 0.90;
       r.lat = Math.max(-(smp.left + 140), Math.min(smp.right + 140, r.lat));
 
-      if (r.airY > 0 || r.airVel > 0) {
-        r.airY += r.airVel;
-        r.airVel -= 0.82;
-        if (r.airY <= 0) {
-          r.airY = 0;
-          r.airVel = Math.abs(r.airVel) > 4 ? Math.abs(r.airVel) * 0.35 : 0;
+      // Advance grounded HIBOB crash animations:
+      // 1) Initial tumble (anim 28, 7 frames)
+      // 2) Pavement slide (anim 29, 8 frames)
+      // 3) Stand up from asphalt (anim 36, 5 frames)
+      const total = r.crashTotalTicks || 66;
+      const elapsed = total - Math.max(0, r.stateTimer);
+      if (elapsed < 22) {
+        r.animId = 28;
+        r.animStep = Math.min(6, Math.floor((elapsed / 22) * 7));
+      } else if (r.stateTimer > 15 || r.speedMph >= 5) {
+        r.animId = 29;
+        r.animTick = (r.animTick || 0) + 1;
+        if (r.animTick >= 4) {
+          r.animTick = 0;
+          r.animStep = (r.animStep + 1) % 8;
         }
+      } else {
+        r.animId = 36;
+        const standFrac = Math.max(0, Math.min(1, (15 - r.stateTimer) / 15));
+        r.animStep = Math.min(4, Math.floor(standFrac * 5));
       }
 
       if (r.stateTimer <= 0 && r.speedMph < 5) {
@@ -1090,6 +1123,7 @@ export class RaceSimulation {
   stepDownedBikes() {
     for (const db of this.downedBikes) {
       if (!db.active) continue;
+      if (db.hitCooldown > 0) db.hitCooldown -= 1;
       if (db.mph > 0.5) {
         const smp = this.sampleInfoAt(db.sample);
         db.sample += db.mph * 0.00145;
@@ -1124,12 +1158,19 @@ export class RaceSimulation {
   stepPedestrians() {
     for (const ped of this.pedestrians) {
       if (!ped.active) continue;
-      if (ped.state === 'hit') {
-        ped.airY += ped.airVel;
-        ped.airVel -= 0.72;
+      if (ped.state === 'down') {
+        ped.airY = 0;
         ped.lat += ped.vx;
-        ped.spinAngle += 0.36;
-        if (ped.airY <= 0) ped.active = false;
+        ped.vx *= 0.86;
+        ped.animTick += 1;
+        if (ped.animTick >= 4 && ped.animStep < 5) {
+          ped.animTick = 0;
+          ped.animStep += 1;
+        }
+        ped.downTimer = (ped.downTimer ?? 120) - 1;
+        if (ped.downTimer <= 0 && this.player.sample - ped.sample > 4) {
+          ped.active = false;
+        }
         continue;
       }
 
@@ -1265,7 +1306,7 @@ export class RaceSimulation {
 
     this.cameraSample = Math.max(1, p.sample - 1.55);
     this.cameraLat += (p.lat * 0.84 - this.cameraLat) * 0.24;
-    this.cameraHeightOffset += (p.airY * 0.55 - this.cameraHeightOffset) * 0.25;
+    this.cameraHeightOffset = 0;
 
     const dSample = p.sample - prevPlayerSample;
     if (Math.abs(dSample) < 2.0) {
