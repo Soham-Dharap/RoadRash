@@ -1,3 +1,24 @@
+@font-face {
+  font-family: 'RRBadloc';
+  src: url('/og/fonts/badloc.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'RRFuturaBold';
+  src: url('/og/fonts/futura-bold.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'RRFuturaDemi';
+  src: url('/og/fonts/futura-demi.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'RRFuturaRegular';
+  src: url('/og/fonts/futura-regular.ttf') format('truetype');
+  font-display: block;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -6,24 +27,118 @@
   -webkit-user-select: none;
 }
 
-html,
-body {
+html, body {
   width: 100%;
   height: 100%;
+  background: #000;
+  color: #defff0;
+  font-family: 'RRFuturaDemi', system-ui, sans-serif;
   overflow: hidden;
-  background: #07080c;
-  color: #f8fafc;
-  font-family: "Arial Narrow", "Impact", "Franklin Gothic Medium", sans-serif;
+  touch-action: none;
 }
 
-#viewport {
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, #111 0%, #000 78%);
+}
+
+#viewport-shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   position: relative;
-  width: 100vw;
-  height: 100vh;
+}
+
+#top-bar {
+  width: min(100vw, calc((100vh - 30px) * 4 / 3));
+  max-width: 1280px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  font-family: 'RRFuturaDemi', sans-serif;
+  font-size: 12px;
+  color: #b8c4be;
+  background: #080808;
+  border-top: 1px solid #222;
+  order: 2;
+}
+
+.bar-badge {
+  font-family: 'RRBadloc', sans-serif;
+  color: #ff6432;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.bar-hint {
+  font-size: 11px;
+  color: #9fb0a8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-hint b {
+  color: #e1e180;
+  font-weight: normal;
+}
+
+.bar-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.bar-actions button {
+  background: #171717;
+  color: #defff0;
+  border: 1px solid #353535;
+  padding: 2px 8px;
+  font-family: 'RRFuturaBold', sans-serif;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.bar-actions button:hover {
+  background: #292929;
+  color: #e1e180;
+  border-color: #ff6432;
+}
+
+#screen-stage {
+  position: relative;
+  order: 1;
+  width: min(100vw, calc((100vh - 30px) * 4 / 3));
+  height: min(calc(100vh - 30px), calc(100vw * 3 / 4));
+  aspect-ratio: 4 / 3;
+  background: #000;
+  box-shadow: 0 0 36px rgba(0, 0, 0, 0.95);
   overflow: hidden;
 }
 
-#game-canvas {
+:fullscreen #top-bar {
+  display: none;
+}
+
+:fullscreen #screen-stage {
+  width: min(100vw, calc(100vh * 4 / 3));
+  height: min(100vh, calc(100vw * 3 / 4));
+}
+
+#gl-canvas,
+#ui-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -33,472 +148,77 @@ body {
   image-rendering: crisp-edges;
 }
 
-#hud-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+#gl-canvas {
+  z-index: 1;
+}
+
+#ui-canvas {
+  z-index: 2;
+  cursor: pointer;
+}
+
+#touch-controls {
+  display: none;
+  position: fixed;
+  inset: auto 0 32px 0;
+  z-index: 20;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 14px;
   pointer-events: none;
 }
 
-.hidden {
-  display: none !important;
-}
-
-/* In-Race Top Quick Strip */
-#race-top-bar {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.hud-mini-btn {
-  background: rgba(12, 14, 20, 0.84);
-  border: 2px solid #64748b;
-  color: #facc15;
-  font-family: monospace;
-  font-weight: 800;
-  font-size: 11px;
-  padding: 5px 9px;
-  cursor: pointer;
-  letter-spacing: 0.4px;
-  box-shadow: 2px 2px 0 #000;
-}
-
-.hud-mini-btn:hover {
-  background: #1e293b;
-  border-color: #facc15;
-}
-
-.hud-key-hint {
-  background: rgba(9, 10, 15, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  padding: 4px 8px;
-  font-family: monospace;
-  font-size: 11px;
-  color: #e2e8f0;
-}
-
-@media (max-width: 900px) {
-  .hud-key-hint {
+@media (pointer: coarse) {
+  #touch-controls.active {
+    display: flex;
+  }
+  .bar-hint {
     display: none;
   }
 }
 
-/* 1996 Windows PC Gritty Menu Styling */
-#ui-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
+.touch-cluster {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  pointer-events: none;
-}
-
-.menu-shell {
-  pointer-events: auto;
-  width: min(940px, 96vw);
-  max-height: 92vh;
-  overflow-y: auto;
-  background:
-    repeating-linear-gradient(
-      -45deg,
-      rgba(24, 26, 32, 0.93),
-      rgba(24, 26, 32, 0.93) 10px,
-      rgba(15, 17, 22, 0.95) 10px,
-      rgba(15, 17, 22, 0.95) 20px
-    );
-  border: 4px solid #eab308;
-  box-shadow:
-    0 0 0 3px #111827,
-    0 20px 55px rgba(0, 0, 0, 0.85);
-  padding: 22px 26px;
-}
-
-.hazard-strip {
-  height: 10px;
-  margin-bottom: 16px;
-  background: repeating-linear-gradient(
-    -55deg,
-    #eab308,
-    #eab308 14px,
-    #111827 14px,
-    #111827 28px
-  );
-  border: 1px solid #000;
-}
-
-.rr-logo-wrap {
-  text-align: center;
-  margin-bottom: 14px;
-}
-
-.rr-logo {
-  font-family: Impact, "Arial Black", sans-serif;
-  font-size: clamp(42px, 7vw, 76px);
-  line-height: 0.94;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  font-style: italic;
-  background: linear-gradient(180deg, #fef08a 0%, #f59e0b 45%, #dc2626 52%, #7f1d1d 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  filter: drop-shadow(4px 5px 0 #000000) drop-shadow(-2px -2px 0 #111827);
-}
-
-.rr-sub {
-  font-family: monospace;
-  font-size: 13px;
-  font-weight: 700;
-  color: #fde047;
-  letter-spacing: 2px;
-  margin-top: 6px;
-  text-shadow: 2px 2px 0 #000;
-}
-
-.menu-grid-main {
-  display: grid;
-  grid-template-columns: 1.15fr 1fr;
-  gap: 20px;
-  align-items: stretch;
-  margin-top: 14px;
-}
-
-@media (max-width: 760px) {
-  .menu-grid-main {
-    grid-template-columns: 1fr;
-  }
-}
-
-.btn-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.rr-btn {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 12px 16px;
-  font-family: Impact, "Arial Black", sans-serif;
-  font-size: 21px;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: #fef9c3;
-  background: linear-gradient(180deg, #374151 0%, #18181b 100%);
-  border: 3px solid #94a3b8;
-  box-shadow: 4px 4px 0 #000;
-  cursor: pointer;
-  transition: transform 0.06s, border-color 0.1s;
-}
-
-.rr-btn span.sub {
-  font-family: monospace;
-  font-size: 11px;
-  color: #cbd5e1;
-  font-weight: 700;
-}
-
-.rr-btn:hover {
-  border-color: #facc15;
-  color: #fde047;
-  transform: translate(-1px, -1px);
-  background: linear-gradient(180deg, #7f1d1d 0%, #3f0d0d 100%);
-}
-
-.rr-btn.primary {
-  background: linear-gradient(180deg, #b91c1c 0%, #650a0a 100%);
-  border-color: #facc15;
-  color: #fef08a;
-}
-
-.rr-btn.primary:hover {
-  background: linear-gradient(180deg, #dc2626 0%, #991b1b 100%);
-}
-
-.rr-btn.small {
-  font-size: 16px;
-  padding: 8px 13px;
-  width: auto;
-}
-
-.info-card {
-  background: rgba(9, 11, 16, 0.88);
-  border: 2px solid #475569;
-  padding: 14px 16px;
-  font-family: monospace;
-  font-size: 12.5px;
-  line-height: 1.52;
-  color: #e2e8f0;
-}
-
-.info-card h3 {
-  font-family: Impact, sans-serif;
-  font-size: 19px;
-  letter-spacing: 1px;
-  color: #facc15;
-  margin-bottom: 8px;
-  font-weight: 400;
-}
-
-.mechanic-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mechanic-list li::before {
-  content: "⚡ ";
-  color: #facc15;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-  border-bottom: 2px solid #eab308;
-  padding-bottom: 8px;
-}
-
-.section-header h2 {
-  font-family: Impact, "Arial Black", sans-serif;
-  font-size: 29px;
-  letter-spacing: 1.5px;
-  color: #fde047;
-  text-shadow: 3px 3px 0 #000;
-  font-weight: 400;
-}
-
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.select-card {
-  background: rgba(11, 14, 21, 0.92);
-  border: 2px solid #475569;
-  padding: 12px;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  box-shadow: 3px 3px 0 #000;
-}
-
-.select-card:hover,
-.select-card.active {
-  border-color: #facc15;
-  background: rgba(58, 18, 22, 0.88);
-}
-
-.select-card h4 {
-  font-family: Impact, sans-serif;
-  font-size: 20px;
-  letter-spacing: 0.8px;
-  color: #fef08a;
-  font-weight: 400;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.select-card p {
-  font-family: monospace;
-  font-size: 11.5px;
-  color: #cbd5e1;
-  line-height: 1.38;
-}
-
-.badge {
-  font-family: monospace;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 2px 6px;
-  background: #1e293b;
-  border: 1px solid #94a3b8;
-  color: #facc15;
-}
-
-.badge.green {
-  background: #052e16;
-  border-color: #22c55e;
-  color: #4ade80;
-}
-
-.stat-bar-row {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  font-family: monospace;
-  font-size: 11px;
-}
-
-.stat-bar-row span {
-  width: 56px;
-  color: #94a3b8;
-}
-
-.stat-track {
-  flex: 1;
-  height: 8px;
-  background: #090a0f;
-  border: 1px solid #334155;
-}
-
-.stat-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #eab308, #22c55e);
-}
-
-.sprite-preview-box {
-  height: 84px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: radial-gradient(circle, #272e3f 0%, #090b10 80%);
-  border: 1px solid #334155;
-}
-
-.sprite-preview-box img {
-  height: 76px;
-  image-rendering: pixelated;
-}
-
-.toolbar-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.level-pills {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.pill-btn {
-  font-family: monospace;
-  font-weight: 800;
-  font-size: 12px;
-  padding: 6px 11px;
-  background: #18181b;
-  color: #cbd5e1;
-  border: 2px solid #475569;
-  cursor: pointer;
-}
-
-.pill-btn.active {
-  background: #b91c1c;
-  color: #fef08a;
-  border-color: #facc15;
-}
-
-/* Results Leaderboard Table */
-.results-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: monospace;
-  font-size: 12px;
-  margin-top: 10px;
-}
-
-.results-table th,
-.results-table td {
-  padding: 5px 8px;
-  border-bottom: 1px solid #334155;
-  text-align: left;
-}
-
-.results-table tr.me {
-  background: rgba(234, 179, 8, 0.22);
-  color: #fef08a;
-  font-weight: 800;
-}
-
-/* Touch Controls */
-#touch-controls {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 25;
-}
-
-.touch-left {
-  position: absolute;
-  left: 14px;
-  bottom: 24px;
-  display: flex;
-  gap: 10px;
   pointer-events: auto;
 }
 
 .touch-right {
-  position: absolute;
-  right: 14px;
-  bottom: 24px;
-  display: flex;
   flex-direction: column;
-  gap: 8px;
   align-items: flex-end;
-  pointer-events: auto;
 }
 
-.touch-combat-row,
-.touch-pedal-row {
+.touch-row {
   display: flex;
   gap: 8px;
 }
 
-.touch-btn {
+.t-btn {
+  background: rgba(20, 20, 20, 0.72);
+  color: #e1e180;
+  border: 2px solid rgba(255, 100, 50, 0.75);
+  border-radius: 8px;
+  font-family: 'RRFuturaBold', sans-serif;
+  font-size: 13px;
+  padding: 12px 14px;
   min-width: 58px;
-  height: 52px;
-  padding: 0 12px;
-  background: rgba(15, 23, 42, 0.78);
-  border: 2px solid #94a3b8;
-  color: #f8fafc;
-  font-family: Impact, sans-serif;
-  font-size: 16px;
-  letter-spacing: 0.8px;
-  border-radius: 6px;
+  touch-action: manipulation;
 }
 
-.touch-btn:active {
-  background: #b91c1c;
-  border-color: #facc15;
+.t-btn:active,
+.t-btn.pressed {
+  background: rgba(255, 100, 50, 0.75);
+  color: #000;
 }
 
-.touch-gas {
-  min-width: 78px;
-  background: rgba(21, 128, 61, 0.8);
-  border-color: #4ade80;
+.t-wide {
+  min-width: 68px;
+  padding: 18px 18px;
+  font-size: 18px;
 }
 
-.touch-punch {
-  background: rgba(185, 28, 28, 0.8);
-}
-
-.touch-kick {
-  background: rgba(180, 83, 9, 0.85);
-}
-
-.touch-nitro {
-  background: rgba(2, 132, 199, 0.85);
+.t-gas {
+  min-width: 82px;
+  padding: 16px 18px;
+  border-color: #5cf27a;
 }

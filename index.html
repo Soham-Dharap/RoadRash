@@ -3,49 +3,54 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>ROAD RASH '96 — Classic Browser Edition</title>
+    <title>Road Rash (1996 PC Edition)</title>
+    <link rel="preload" href="/og/fonts/badloc.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/og/fonts/futura-bold.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/og/fonts/futura-demi.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/og/fonts/futura-regular.ttf" as="font" type="font/ttf" crossorigin />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="viewport">
-      <!-- 3D Papy3D-style WebGL Viewport (crisp 480p SVGA NearestFilter) -->
-      <canvas id="game-canvas"></canvas>
-
-      <!-- 1996 Sculpted Cockpit Fairing Dashboard HUD Canvas -->
-      <canvas id="hud-canvas"></canvas>
-
-      <!-- In-Race Top-Left Control Strip -->
-      <div id="race-top-bar" class="hidden">
-        <button id="btn-pause-race" class="hud-mini-btn" title="Pause (Esc)">⏸ PAUSE</button>
-        <button id="btn-cam-toggle" class="hud-mini-btn" title="Switch Camera / Dashboard (V)">🎥 CAM [V]</button>
-        <button id="btn-mirror-toggle" class="hud-mini-btn" title="Toggle Rearview Mirror (M)">🪞 MIRROR [M]</button>
-        <button id="btn-music-next" class="hud-mini-btn" title="Next Grunge Track (T)">🎸 SONG [T]</button>
-        <span class="hud-key-hint">WASD/Arrows • [SPACE/Z] Punch/Weapon • [X/C] Kick • [N] Nitro</span>
-      </div>
-
-      <!-- Mobile / Touch Controls Overlay -->
-      <div id="touch-controls" class="hidden">
-        <div class="touch-left">
-          <button class="touch-btn" data-control="left">◄</button>
-          <button class="touch-btn" data-control="right">►</button>
+    <div id="app">
+      <div id="viewport-shell">
+        <div id="screen-stage">
+          <canvas id="gl-canvas" width="640" height="480"></canvas>
+          <canvas id="ui-canvas" width="640" height="480"></canvas>
         </div>
-        <div class="touch-right">
-          <div class="touch-combat-row">
-            <button class="touch-btn touch-punch" data-action="punch">PUNCH</button>
-            <button class="touch-btn touch-kick" data-action="kick">KICK</button>
-            <button class="touch-btn touch-nitro" data-action="nitro">N2O</button>
-          </div>
-          <div class="touch-pedal-row">
-            <button class="touch-btn touch-brake" data-control="brake">BRAKE</button>
-            <button class="touch-btn touch-gas" data-control="accel">GAS</button>
+
+        <div id="top-bar" aria-label="Toolbar">
+          <span class="bar-badge">ROAD RASH &bull; 1996 PC</span>
+          <span id="controls-hint" class="bar-hint">
+            <b>ARROWS/WASD</b> Steer &amp; Gas &bull;
+            <b>Z</b> Left Attack &bull; <b>C</b> Right Attack &bull; <b>X</b> Boot Kick &bull;
+            <b>SPACE</b> Nitro &bull; <b>F10</b> HUD &bull; <b>ESC</b> Menu/Pause
+          </span>
+          <div class="bar-actions">
+            <button id="btn-music" type="button" title="Next Music Track (M)">MUSIC: ON</button>
+            <button id="btn-mute" type="button" title="Mute Audio">SFX: ON</button>
+            <button id="btn-fullscreen" type="button" title="Toggle Fullscreen (F11)">FULLSCREEN</button>
           </div>
         </div>
-      </div>
 
-      <!-- Menus & Career Screens Container -->
-      <div id="ui-layer"></div>
+        <div id="touch-controls" aria-hidden="true">
+          <div class="touch-cluster touch-left">
+            <button type="button" data-action="left" class="t-btn t-wide">&#9664;</button>
+            <button type="button" data-action="right" class="t-btn t-wide">&#9654;</button>
+          </div>
+          <div class="touch-cluster touch-right">
+            <div class="touch-row">
+              <button type="button" data-action="punchL" class="t-btn t-combat">PUNCH</button>
+              <button type="button" data-action="kick" class="t-btn t-kick">KICK</button>
+              <button type="button" data-action="nitro" class="t-btn t-nitro">NITRO</button>
+            </div>
+            <div class="touch-row">
+              <button type="button" data-action="brake" class="t-btn t-brake">BRAKE</button>
+              <button type="button" data-action="gas" class="t-btn t-gas">GAS</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
