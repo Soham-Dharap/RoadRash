@@ -1,21 +1,40 @@
 // Authentic 1996 Road Rash 60Hz Race Simulation Engine
 // Exact ROADRASH.EXE speed-to-sample scale (0.1526 samples/tick at 100 MPH, 33 samples = 0.1 mi),
 // exact race.cpp centrifugal curve sweep, grounded hill crests & fixed camera height (no fake jumps!),
-// 6-speed gearbox & RPM needle, smart/directional melee combat (punches, clubs, chains, weapon snatching),
+// 6-speed gearbox & RPM needle, ALL OG weapons unlocked (Fists, Club, Chain, Police Baton + Boot Kick),
 // lateral boot-kick shoves into traffic/walls, grounded pedestrian knockdowns & HIBOB crash animations,
-// exact race.cpp iclass==0 downed-bike ride-over, motorcycle cops, and Nitro Speed Boost on ALL 15 bikes!
+// exact race.cpp iclass==0 downed-bike ride-over, Special Police Interceptor Mode, and Nitro on ALL bikes!
+
+export const OG_WEAPONS = [
+  { id: 0, key: 'FISTS', name: 'Bare Fists', label: 'Bare Fists (Snatch)', reach: 178, dmg: 20, shove: 5.0, sfx: 'punchhea', swish: 'swishgen' },
+  { id: 1, key: 'CLUB', name: 'Wooden Club', label: 'Wooden Club', reach: 202, dmg: 38, shove: 8.6, sfx: 'clubimpa', swish: 'swishgen' },
+  { id: 2, key: 'CHAIN', name: 'Steel Chain', label: 'Steel Chain', reach: 222, dmg: 44, shove: 8.2, sfx: 'chainimp', swish: 'swishcha' },
+  { id: 3, key: 'BATON', name: 'Police Nightstick', label: 'Police Nightstick', reach: 212, dmg: 48, shove: 13.5, sfx: 'clubimpa', swish: 'swishgen' }
+];
+
+// Exact ROADRASH.EXE attack_codes[right ? 1 : 0][backhand ? 1 : 0][weaponSlot]
+const ATTACK_CODES = [
+  [
+    [22, 16, 10, 26], // Left forehand:  Fists=22, Club/Baton=16, Chain=10, Kick=26
+    [24, 18, 12, 26]  // Left backhand:  Fists=24, Club/Baton=18, Chain=12, Kick=26
+  ],
+  [
+    [23, 17, 11, 27], // Right forehand: Fists=23, Club/Baton=17, Chain=11, Kick=27
+    [25, 19, 13, 27]  // Right backhand: Fists=25, Club/Baton=19, Chain=13, Kick=27
+  ]
+];
 
 const RIVAL_ROSTER = [
   { name: 'Biff', aggr: 0.86, weapon: 1, bikeId: 3, female: false },
-  { name: 'Ikira', aggr: 0.72, weapon: 0, bikeId: 12, female: false },
+  { name: 'Ikira', aggr: 0.72, weapon: 2, bikeId: 12, female: false },
   { name: 'Lola', aggr: 0.68, weapon: 2, bikeId: 14, female: true },
   { name: 'Natasha', aggr: 0.80, weapon: 2, bikeId: 7, female: true },
   { name: 'Slater', aggr: 0.90, weapon: 1, bikeId: 4, female: false },
   { name: 'Torque', aggr: 0.82, weapon: 1, bikeId: 11, female: false },
   { name: 'Viper', aggr: 0.93, weapon: 2, bikeId: 8, female: false },
   { name: 'Helga', aggr: 0.76, weapon: 1, bikeId: 10, female: true },
-  { name: 'Chino', aggr: 0.74, weapon: 0, bikeId: 2, female: false },
-  { name: 'Cannon', aggr: 0.66, weapon: 0, bikeId: 0, female: false },
+  { name: 'Chino', aggr: 0.74, weapon: 1, bikeId: 2, female: false },
+  { name: 'Cannon', aggr: 0.66, weapon: 2, bikeId: 0, female: false },
   { name: 'Sven', aggr: 0.78, weapon: 1, bikeId: 6, female: false },
   { name: 'Roxy', aggr: 0.71, weapon: 2, bikeId: 13, female: true },
   { name: 'Spike', aggr: 0.88, weapon: 2, bikeId: 5, female: false },
@@ -34,6 +53,13 @@ export class RaceSimulation {
     this.course = courseRenderer.course;
     this.onRaceComplete = onRaceComplete;
 
+    this.isPoliceMode = config.mode === 'copchase';
+    this.bustedCount = 0;
+    this.totalOutlaws = 14;
+    this.outlawsRemaining = 14;
+    this.leadOutlaw = null;
+    this.escapedOutlawName = '';
+
     this.ticks = 0;
     this.countdownTicks = 180; // 3.0s 3-2-1-GO! (lifecycle.hpp: 3 * 60)
     this.goBannerTicks = 0;
@@ -43,8 +69,10 @@ export class RaceSimulation {
 
     const totalSamples = this.course.samples.length;
     this.startSample = this.course.startSample || 50;
+    // In Police Pursuit Mode, give at least Level-3+ distance so Officer can intercept all 14 racers!
+    const effFinishLevel = this.isPoliceMode ? Math.max(2, config.level || 0) : config.level || 0;
     this.finishSample =
-      this.course.finishSamples?.[config.level] || Math.max(240, totalSamples - 50);
+      this.course.finishSamples?.[effFinishLevel] || Math.max(240, totalSamples - 50);
 
     this.bannerText = '';
     this.bannerColor = '#ffff40';
@@ -76,6 +104,19 @@ export class RaceSimulation {
   }
 
   bikeStats(bikeId, isPlayer = false) {
+    if (isPlayer && this.isPoliceMode) {
+      return {
+        cls: 'super',
+        hasNitro: true,
+        nitroCharges: 10,
+        maxNitroCharges: 10,
+        topMph: 204 + (this.config.level || 0) * 6,
+        accel: 1.24 + (this.config.level || 0) * 0.05,
+        steerRate: 10.4,
+        maxBikeCond: 280
+      };
+    }
+
     const raw = this.assets.frontend?.bikes?.[bikeId];
     const cls = bikeId < 5 ? 'rat' : bikeId < 10 ? 'super' : 'sport';
     // Custom feature: Nitro / Speed Boost enabled on ALL 15 bikes for the player!
@@ -92,8 +133,8 @@ export class RaceSimulation {
       hasNitro,
       nitroCharges: isPlayer ? 8 : hasNitro ? 6 : 0,
       maxNitroCharges: isPlayer ? 8 : hasNitro ? 6 : 0,
-      topMph: topMphBase + this.config.level * 5,
-      accel: accelBase + this.config.level * 0.05,
+      topMph: topMphBase + (this.config.level || 0) * 5,
+      accel: accelBase + (this.config.level || 0) * 0.05,
       steerRate: steerBase,
       maxBikeCond: cls === 'rat' ? 135 : cls === 'sport' ? 155 : 175
     };
@@ -101,17 +142,29 @@ export class RaceSimulation {
 
   initRiders() {
     const pStats = this.bikeStats(this.config.bikeId, true);
+    const defaultWeapon =
+      this.config.startWeapon !== undefined
+        ? this.config.startWeapon
+        : this.isPoliceMode
+          ? 3
+          : 2;
+
     this.player = this.makeRider({
       id: 0,
       isPlayer: true,
-      name: this.config.playerName || 'Axle',
+      isPolice: this.isPoliceMode,
+      sirenOn: this.isPoliceMode,
+      name: this.isPoliceMode
+        ? `Ofc. ${this.config.playerName || 'Soham'}`
+        : this.config.playerName || 'Axle',
       female: Boolean(this.config.female),
       colorIdx: 0,
-      bikeId: this.config.bikeId,
+      bikeId: this.isPoliceMode ? 9 : this.config.bikeId,
       stats: pStats,
       sample: this.startSample,
-      lat: 95,
-      weapon: 0,
+      lat: this.isPoliceMode ? 0 : 95,
+      weapon: defaultWeapon,
+      unlockedWeapons: [0, 1, 2, 3],
       aggr: 0
     });
     this.riders.push(this.player);
@@ -119,28 +172,38 @@ export class RaceSimulation {
 
     for (let i = 0; i < 14; i++) {
       const rdef = RIVAL_ROSTER[i];
-      const lvlBike = Math.min(14, (rdef.bikeId + this.config.level * 2) % 15);
+      const lvlBike = Math.min(14, (rdef.bikeId + (this.config.level || 0) * 2) % 15);
       const st = this.bikeStats(lvlBike, false);
       const row = Math.floor((i + 1) / 2);
       const col = (i + 1) % 2;
 
-      const aiScale = 0.85 + (i / 14) * 0.21 + this.config.level * 0.025;
-      st.topMph = pStats.topMph * aiScale;
+      if (this.isPoliceMode) {
+        // Outlaws race hard toward the finish line, paced so a skilled Police Interceptor can hunt all 14!
+        const outlawMph = 112 + (i / 14) * 32 + (this.config.level || 0) * 6;
+        st.topMph = outlawMph;
+        st.accel = 0.72 + (i / 14) * 0.16;
+      } else {
+        const aiScale = 0.85 + (i / 14) * 0.21 + (this.config.level || 0) * 0.025;
+        st.topMph = pStats.topMph * aiScale;
+      }
 
       this.riders.push(
         this.makeRider({
           id: i + 1,
           isPlayer: false,
+          isPolice: false,
+          sirenOn: false,
           name: rdef.name,
           female: rdef.female,
           colorIdx: (i % 14) + 1,
           bikeId: lvlBike,
           stats: st,
-          sample: this.startSample + row * 1.18,
-          lat: col === 0 ? -135 : 135,
-          weapon: i % 3 === 0 ? rdef.weapon : 0,
+          sample: this.startSample + (this.isPoliceMode ? 2.2 + row * 1.45 : row * 1.18),
+          lat: col === 0 ? -145 : 145,
+          weapon: i % 2 === 0 ? rdef.weapon : 0,
           aggr: rdef.aggr,
-          aiLaneTarget: (col === 0 ? -155 : 155) + ((i * 37) % 90) - 45
+          aiLaneTarget: (col === 0 ? -155 : 155) + ((i * 37) % 90) - 45,
+          lastTouchedByPlayerTick: -9999
         })
       );
     }
@@ -192,7 +255,9 @@ export class RaceSimulation {
   }
 
   initTraffic() {
-    const courseCars = this.assets.carsMeta?.courses?.[this.course.name] || [];
+    const courseKey = this.course.carPool || this.course.name;
+    const courseCars =
+      this.assets.carsMeta?.courses?.[courseKey] || this.assets.carsMeta?.courses?.CITY || [];
     const numKinds = Math.max(1, courseCars.length);
     const totalSpan = this.finishSample - (this.startSample + 22);
     const count = Math.min(36, Math.max(18, Math.floor(totalSpan / 45)));
@@ -271,7 +336,9 @@ export class RaceSimulation {
   }
 
   initPolice() {
-    const patrolCount = 2 + Math.min(2, Math.floor(this.config.level / 2));
+    if (this.isPoliceMode) return; // Player IS the Police Interceptor in Police Mode!
+
+    const patrolCount = 2 + Math.min(2, Math.floor((this.config.level || 0) / 2));
     const span = this.finishSample - (this.startSample + 110);
     for (let i = 0; i < patrolCount; i++) {
       const spawnS = this.startSample + 120 + Math.floor(((i + 0.45) * span) / patrolCount);
@@ -288,7 +355,7 @@ export class RaceSimulation {
         lean: 0,
         airY: 0,
         stamina: 115,
-        animId: 0,
+        animId: 2,
         animStep: 0,
         animTick: 0,
         attackCooldown: 45
@@ -338,6 +405,33 @@ export class RaceSimulation {
       this.audio.playSfx(p.female ? 'f_yeah' : 'm_yeah', { volume: 0.76 });
       this.showBanner(`NITRO BOOST! (${p.nitroCharges} LEFT)`, '#66e6ff', 65);
     }
+  }
+
+  cycleWeapon(step = 1) {
+    const p = this.player;
+    if (!p) return;
+    const count = OG_WEAPONS.length;
+    p.weapon = (((p.weapon || 0) + step) % count + count) % count;
+    const w = OG_WEAPONS[p.weapon] || OG_WEAPONS[0];
+    this.audio.playSfx(w.swish, { volume: 0.65, rate: 1.1 });
+    this.showBanner(`EQUIPPED: ${w.label.toUpperCase()}`, '#ffcf40', 55);
+  }
+
+  selectWeapon(weaponId) {
+    const p = this.player;
+    if (!p || weaponId < 0 || weaponId >= OG_WEAPONS.length) return;
+    p.weapon = weaponId;
+    const w = OG_WEAPONS[p.weapon] || OG_WEAPONS[0];
+    this.audio.playSfx(w.swish, { volume: 0.65, rate: 1.1 });
+    this.showBanner(`EQUIPPED: ${w.label.toUpperCase()}`, '#ffcf40', 55);
+  }
+
+  toggleSiren() {
+    const p = this.player;
+    if (!p || !p.isPolice) return;
+    p.sirenOn = !p.sirenOn;
+    this.audio.playSfx('sirenfst', { volume: 0.6 });
+    this.showBanner(p.sirenOn ? 'POLICE SIREN: ON' : 'POLICE SIREN: SILENT', '#66e6ff', 50);
   }
 
   pickSmartSide(rider, steerDir = 0) {
@@ -536,7 +630,8 @@ export class RaceSimulation {
     if (r.nitroTicks > 0) r.nitroTicks -= 1;
     if (r.isPlayer && r.nitroTicks <= 0 && r.nitroCharges < r.maxNitroCharges) {
       r.nitroRechargeTicks = (r.nitroRechargeTicks || 0) + 1;
-      if (r.nitroRechargeTicks >= 1080) {
+      const rechargeTarget = this.isPoliceMode ? 540 : 1080;
+      if (r.nitroRechargeTicks >= rechargeTarget) {
         r.nitroRechargeTicks = 0;
         r.nitroCharges += 1;
       }
@@ -674,12 +769,14 @@ export class RaceSimulation {
   startAttack(r, type, side) {
     r.attackType = type;
     r.attackSide = side < 0 ? -1 : 1;
+    r.attackBackhand = ((this.ticks + r.id) & 1) === 1;
     r.attackPhase = 'windup';
     r.attackTimer = 0;
     r.hitDone = false;
 
     if (r.isPlayer) {
-      const sfx = r.weapon === 2 ? 'swishcha' : 'swishgen';
+      const wDef = OG_WEAPONS[r.weapon] || OG_WEAPONS[0];
+      const sfx = type === 'kick' ? 'swishgen' : wDef.swish;
       this.audio.playSfx(sfx, { volume: 0.74 });
     }
   }
@@ -687,7 +784,7 @@ export class RaceSimulation {
   stepAttackAndAnim(r) {
     if (r.staggerTimer > 0) {
       r.staggerTimer -= 1;
-      r.animId = 5;
+      r.animId = r.isPolice ? 9 : 5;
       r.animStep = r.staggerTimer > 8 ? 0 : 1;
       r.forceMirror = r.lastHitSide < 0;
       return;
@@ -696,20 +793,28 @@ export class RaceSimulation {
     if (r.attackPhase !== 'idle') {
       r.attackTimer += 1;
       const isKick = r.attackType === 'kick';
-      const isWeapon = r.attackType === 'weapon' && r.weapon > 0;
+      const rightIdx = r.attackSide > 0 ? 1 : 0;
+      const backIdx = r.attackBackhand ? 1 : 0;
 
-      if (isKick) {
-        r.animId = r.attackSide > 0 ? 26 : 27;
-        r.forceMirror = null;
-      } else if (isWeapon) {
-        r.animId = r.weapon === 1 ? (r.attackSide > 0 ? 10 : 12) : r.attackSide > 0 ? 16 : 18;
+      // Weapon index into ROADRASH.EXE ATTACK_CODES: 0=Fists, 1=Club/Baton, 2=Chain, 3=Kick
+      let wSlot = 0;
+      if (isKick) wSlot = 3;
+      else if (r.weapon === 2) wSlot = 2;
+      else if (r.weapon === 1 || r.weapon === 3) wSlot = 1;
+
+      if (r.isPolice) {
+        // LOCOP.DAT has copAnim[16] (left baton/weapon swing) & copAnim[17] (right swing)!
+        r.animId = r.attackSide > 0 ? 17 : 16;
         r.forceMirror = null;
       } else {
-        r.animId = r.attackSide > 0 ? 22 : 24;
-        r.forceMirror = r.attackSide < 0;
+        r.animId = ATTACK_CODES[rightIdx][backIdx][wSlot];
+        r.forceMirror = null;
       }
 
-      const seq = this.assets.bikersMeta?.riderAnims?.[r.animId] || [{ dur: 8 }, { dur: 8 }];
+      const bank = r.isPolice
+        ? this.assets.bikersMeta?.copAnims
+        : this.assets.bikersMeta?.riderAnims;
+      const seq = bank?.[r.animId] || [{ dur: 8 }, { dur: 8 }];
       const totalTicks = Math.max(10, seq.length * 4);
       r.animStep = Math.min(seq.length - 1, Math.floor((r.attackTimer / totalTicks) * seq.length));
 
@@ -729,8 +834,8 @@ export class RaceSimulation {
     }
 
     r.forceMirror = null;
-    if (r.airY > 14) {
-      r.animId = 4;
+    if (r.isPolice) {
+      r.animId = 2;
       r.animStep = 0;
     } else if (r.nitroTicks > 0 || r.speedMph > r.stats.topMph * 0.92) {
       r.animId = 3;
@@ -759,8 +864,36 @@ export class RaceSimulation {
     return best;
   }
 
+  bustOutlaw(victim, methodLabel = 'BUSTED') {
+    if (!this.isPoliceMode || victim.isPlayer || victim.state === 'busted') return;
+    victim.state = 'busted';
+    victim.speedMph = 0;
+    victim.latVel = 0;
+    victim.shoveVel = 0;
+    victim.finished = false;
+    if (victim.downedBikeRef) victim.downedBikeRef.active = false;
+
+    this.bustedCount += 1;
+    this.outlawsRemaining = Math.max(0, this.totalOutlaws - this.bustedCount);
+
+    this.audio.playSfx('sirenfst', { volume: 0.92 });
+    this.audio.playSfx('crashhar', { volume: 0.85 });
+    this.playGrunt(victim.female);
+
+    if (this.outlawsRemaining === 0) {
+      this.showBanner('ALL 14 OUTLAWS BUSTED! HIGHWAY SECURED!', '#66ff66', 110);
+    } else {
+      this.showBanner(
+        `${methodLabel} ${victim.name.toUpperCase()}! (${this.outlawsRemaining} LEFT)`,
+        '#66e6ff',
+        85
+      );
+    }
+  }
+
   resolveCombatHit(attacker) {
-    const reachLat = attacker.attackType === 'weapon' && attacker.weapon > 0 ? 205 : 178;
+    const wDef = OG_WEAPONS[attacker.weapon] || OG_WEAPONS[0];
+    const reachLat = attacker.attackType === 'kick' ? 186 : wDef.reach;
 
     // 1. Check rival / player bikers
     for (const victim of this.riders) {
@@ -768,9 +901,9 @@ export class RaceSimulation {
       if (victim.isPlayer && victim.staggerTimer > 6) continue;
       const ds = Math.abs(victim.sample - attacker.sample);
       const relLat = victim.lat - attacker.lat;
-      if (ds > 1.7) continue;
-      if (attacker.attackSide > 0 && (relLat < -28 || relLat > reachLat)) continue;
-      if (attacker.attackSide < 0 && (relLat > 28 || relLat < -reachLat)) continue;
+      if (ds > 1.75) continue;
+      if (attacker.attackSide > 0 && (relLat < -30 || relLat > reachLat)) continue;
+      if (attacker.attackSide < 0 && (relLat > 30 || relLat < -reachLat)) continue;
 
       // TIMED WEAPON SNATCH: Bare-knuckle punch while armed rival is swinging steals their weapon!
       if (
@@ -779,41 +912,39 @@ export class RaceSimulation {
         victim.weapon > 0 &&
         victim.attackPhase !== 'idle'
       ) {
-        const stolenName = victim.weapon === 2 ? 'CHAIN' : 'CLUB';
+        const stolenDef = OG_WEAPONS[victim.weapon] || OG_WEAPONS[1];
         attacker.weapon = victim.weapon;
         victim.weapon = 0;
         victim.attackPhase = 'idle';
         if (attacker.isPlayer || victim.isPlayer) {
           this.audio.playSfx(attacker.female ? 'f_yeah' : 'm_yeah', { volume: 0.9 });
           this.showBanner(
-            attacker.isPlayer ? `SNATCHED ${stolenName}!` : `${attacker.name.toUpperCase()} STOLE YOUR ${stolenName}!`,
+            attacker.isPlayer
+              ? `SNATCHED ${stolenDef.key}!`
+              : `${attacker.name.toUpperCase()} STOLE YOUR ${stolenDef.key}!`,
             '#ffcf40',
             80
           );
         }
       }
 
-      let dmg = 18;
-      let latShove = attacker.attackSide * 4.8;
-      let hitSfx = 'punchhea';
+      let dmg = wDef.dmg;
+      let latShove = attacker.attackSide * wDef.shove;
+      let hitSfx = wDef.sfx;
 
       if (attacker.attackType === 'kick') {
-        dmg = 22;
+        dmg = this.isPoliceMode && attacker.isPlayer ? 28 : 22;
         // MASSIVE LATERAL SHOVE: kicks launch rival bikes sideways across lanes into oncoming cars & walls!
-        latShove = attacker.attackSide * 21.0;
+        latShove = attacker.attackSide * (this.isPoliceMode && attacker.isPlayer ? 24.0 : 21.0);
         hitSfx = 'kick_mw4';
-      } else if (attacker.attackType === 'weapon' && attacker.weapon === 1) {
-        dmg = 36;
-        latShove = attacker.attackSide * 7.8;
-        hitSfx = 'clubimpa';
-      } else if (attacker.attackType === 'weapon' && attacker.weapon === 2) {
-        dmg = 40;
-        latShove = attacker.attackSide * 7.2;
-        hitSfx = 'chainimp';
+      } else if (this.isPoliceMode && attacker.isPlayer) {
+        // Police Interceptor hits extra hard so Officer can systematically take down all 14 outlaws!
+        dmg = Math.round(dmg * 1.28);
+        latShove *= 1.15;
       }
 
       if (victim.isPlayer) {
-        dmg = Math.round(dmg * 0.48);
+        dmg = Math.round(dmg * (this.isPoliceMode ? 0.32 : 0.48));
         latShove *= 0.65;
       }
 
@@ -823,6 +954,9 @@ export class RaceSimulation {
       victim.staggerTimer = attacker.attackType === 'kick' ? 22 : 16;
       victim.hitSparkTimer = 10;
       victim.lastHitSide = -attacker.attackSide;
+      if (attacker.isPlayer) {
+        victim.lastTouchedByPlayerTick = this.ticks;
+      }
 
       if (attacker.isPlayer || victim.isPlayer) {
         this.audio.playSfx(hitSfx, { volume: 0.9 });
@@ -833,11 +967,15 @@ export class RaceSimulation {
       }
 
       if (victim.stamina <= 0) {
-        if (attacker.isPlayer) {
-          this.audio.playSfx(attacker.female ? 'f_yeah' : 'm_yeah', { volume: 0.9 });
-          this.showBanner(`KO'D ${victim.name.toUpperCase()}!`, '#66ff66', 80);
+        if (this.isPoliceMode && attacker.isPlayer) {
+          this.bustOutlaw(victim, 'BUSTED');
+        } else {
+          if (attacker.isPlayer) {
+            this.audio.playSfx(attacker.female ? 'f_yeah' : 'm_yeah', { volume: 0.9 });
+            this.showBanner(`KO'D ${victim.name.toUpperCase()}!`, '#66ff66', 80);
+          }
+          this.triggerCrash(victim, Math.max(40, victim.speedMph * 0.72), attacker.attackSide, 'KNOCKED OUT!');
         }
-        this.triggerCrash(victim, Math.max(40, victim.speedMph * 0.72), attacker.attackSide, 'KNOCKED OUT!');
       }
       return;
     }
@@ -936,10 +1074,24 @@ export class RaceSimulation {
         other.latVel = (other.lat >= r.lat ? 1 : -1) * 5.0;
         other.speedMph = r.speedMph * 0.32;
         r.speedMph *= 0.93;
+        if (this.isPoliceMode && r.isPlayer) {
+          this.bustOutlaw(other, 'ARRESTED');
+          continue;
+        }
         if (r.isPlayer || other.isPlayer) {
           this.audio.playSfx('punchhea', { volume: 0.82 });
           this.playGrunt(other.female);
           if (r.isPlayer) this.showBanner(`CLIPPED ${other.name.toUpperCase()}!`, '#ffcf40', 60);
+        }
+      }
+    }
+
+    // In Police Mode, riding right past any crashed/running outlaw arrests them on the spot!
+    if (this.isPoliceMode && r.isPlayer) {
+      for (const other of this.riders) {
+        if (other.isPlayer || other.state === 'riding' || other.state === 'busted') continue;
+        if (Math.abs(other.sample - r.sample) < 3.2 && Math.abs(other.lat - r.lat) < 165) {
+          this.bustOutlaw(other, 'ARRESTED');
         }
       }
     }
@@ -958,7 +1110,7 @@ export class RaceSimulation {
           r.latVel += pushDir * 4.5;
           db.lat -= pushDir * 10;
           if (r.isPlayer) this.audio.playSfx('crashlit', { volume: 0.52 });
-        } else if (Math.abs(r.lean) < 0.68) {
+        } else if (Math.abs(r.lean) < 0.68 || r.isPolice) {
           // Small realistic OG tire hop over the downed bike frame — stays planted right on the road!
           r.airVel = 3.2;
           r.airY = 2;
@@ -982,6 +1134,17 @@ export class RaceSimulation {
 
   triggerCrash(r, severityMph, sideDir, reason = '') {
     if (r.state !== 'riding') return;
+
+    // In Police Pursuit Mode, shoving/ramming an outlaw into traffic, walls, or cliffs busts them!
+    if (
+      this.isPoliceMode &&
+      !r.isPlayer &&
+      (this.ticks - (r.lastTouchedByPlayerTick || -9999) < 180 ||
+        Math.abs(r.sample - this.player.sample) < 16)
+    ) {
+      this.bustOutlaw(r, reason === 'OVER THE CLIFF!' ? 'CLIFF-BUSTED' : 'BUSTED');
+      return;
+    }
 
     const bikeDmg = Math.max(12, Math.floor(severityMph * 0.28));
     r.bikeCond = Math.max(0, r.bikeCond - bikeDmg);
@@ -1007,10 +1170,14 @@ export class RaceSimulation {
       spinStep: 0,
       hitCooldown: 0
     };
-    this.downedBikes.push(db);
-    r.downedBikeRef = db;
+    if (!r.isPolice) {
+      this.downedBikes.push(db);
+      r.downedBikeRef = db;
+    } else {
+      r.downedBikeRef = null;
+    }
 
-    // Grounded HIBOB crash: anim[28] tumble -> anim[29] slide -> anim[36] stand-up -> anim[38] sprint
+    // Grounded HIBOB / LOCOP crash: anim[28] tumble -> anim[29/33] slide -> anim[36/37] stand-up
     r.state = 'crashing';
     r.crashTotalTicks = 66;
     r.stateTimer = 66;
@@ -1042,7 +1209,18 @@ export class RaceSimulation {
       // 3) Stand up from asphalt (anim 36, 5 frames)
       const total = r.crashTotalTicks || 66;
       const elapsed = total - Math.max(0, r.stateTimer);
-      if (elapsed < 22) {
+      if (r.isPolice) {
+        if (elapsed < 24) {
+          r.animId = 28;
+          r.animStep = Math.min(6, Math.floor((elapsed / 24) * 7));
+        } else if (r.stateTimer > 16 || r.speedMph >= 5) {
+          r.animId = 33;
+          r.animStep = Math.floor(elapsed / 4) % 5;
+        } else {
+          r.animId = 37;
+          r.animStep = Math.min(3, Math.floor(((16 - r.stateTimer) / 16) * 4));
+        }
+      } else if (elapsed < 22) {
         r.animId = 28;
         r.animStep = Math.min(6, Math.floor((elapsed / 22) * 7));
       } else if (r.stateTimer > 15 || r.speedMph >= 5) {
@@ -1064,7 +1242,7 @@ export class RaceSimulation {
           if (!r.isPlayer && r.downedBikeRef) r.downedBikeRef.active = false;
           return;
         }
-        if (r.isPlayer) {
+        if (r.isPlayer && !r.isPolice) {
           for (const cop of this.cops) {
             if (cop.active && Math.abs(cop.sample - r.sample) < 10) {
               r.state = 'busted';
@@ -1072,6 +1250,13 @@ export class RaceSimulation {
               return;
             }
           }
+        }
+        if (r.isPolice) {
+          r.state = 'riding';
+          r.animId = 2;
+          r.speedMph = 32;
+          r.lean = 0;
+          return;
         }
         r.state = 'running';
         r.animId = 38;
@@ -1202,6 +1387,13 @@ export class RaceSimulation {
           b.lat -= push;
           a.latVel += push * 0.55;
           b.latVel -= push * 0.55;
+          if (a.isPlayer) {
+            b.lastTouchedByPlayerTick = this.ticks;
+            if (this.isPoliceMode) b.shoveVel = (b.shoveVel || 0) - push * 1.4;
+          } else if (b.isPlayer) {
+            a.lastTouchedByPlayerTick = this.ticks;
+            if (this.isPoliceMode) a.shoveVel = (a.shoveVel || 0) + push * 1.4;
+          }
           if ((a.isPlayer || b.isPlayer) && this.ticks % 12 === 0) {
             this.audio.playSfx('crashlit', { volume: 0.38 });
           }
@@ -1272,6 +1464,10 @@ export class RaceSimulation {
 
   updateStandings() {
     const sorted = [...this.riders].sort((a, b) => {
+      if (this.isPoliceMode) {
+        if (a.state === 'busted' && b.state !== 'busted') return 1;
+        if (b.state === 'busted' && a.state !== 'busted') return -1;
+      }
       if (a.finished && b.finished) return a.finishTick - b.finishTick;
       if (a.finished) return -1;
       if (b.finished) return 1;
@@ -1282,14 +1478,30 @@ export class RaceSimulation {
     });
     this.playerPlace = this.player.place;
 
-    // Nearest rival for right-side Cockpit HUD Stamina & Gap readout
-    if (this.focusedRival && this.focusedRival.state === 'riding') {
+    if (this.isPoliceMode) {
+      let rem = 0;
+      let leader = null;
+      for (const r of this.riders) {
+        if (r.isPlayer || r.state === 'busted') continue;
+        rem += 1;
+        if (!leader || r.sample > leader.sample) leader = r;
+      }
+      this.outlawsRemaining = rem;
+      this.leadOutlaw = leader;
+    }
+
+    // Nearest active rival for right-side Cockpit HUD Stamina & Gap readout
+    if (
+      this.focusedRival &&
+      this.focusedRival.state === 'riding' &&
+      this.focusedRival.state !== 'busted'
+    ) {
       this.nearestRival = this.focusedRival;
     } else {
       let best = null;
       let bestD = Infinity;
       for (const r of this.riders) {
-        if (r.isPlayer) continue;
+        if (r.isPlayer || r.state === 'busted') continue;
         const d = Math.abs(r.sample - this.player.sample);
         if (d < bestD) {
           bestD = d;
@@ -1341,7 +1553,11 @@ export class RaceSimulation {
     let copDist = Infinity;
     let copPan = 0;
     let copChasing = false;
-    if (this.activeCop && this.activeCop.active) {
+    if (p.isPolice && p.sirenOn && this.outlawsRemaining > 0) {
+      copDist = rivalDist < 2200 ? 130 : 320;
+      copPan = 0;
+      copChasing = true;
+    } else if (this.activeCop && this.activeCop.active) {
       copDist = Math.hypot((this.activeCop.sample - p.sample) * 256, this.activeCop.lat - p.lat);
       copPan = Math.max(-1, Math.min(1, (this.activeCop.lat - p.lat) / 400));
       copChasing = this.activeCop.chasing;
@@ -1370,7 +1586,34 @@ export class RaceSimulation {
     const p = this.player;
     if (p.state === 'wrecked') {
       this.finishRaceWithStatus('wrecked');
-    } else if (p.state === 'busted') {
+      return;
+    }
+
+    if (this.isPoliceMode) {
+      // Prevent player from accidentally ending the race by crossing finishSample ahead of #1!
+      if (p.sample > this.finishSample - 6 && this.outlawsRemaining > 0) {
+        p.sample = this.finishSample - 6;
+        p.speedMph = Math.min(p.speedMph, 15);
+        p.finished = false;
+      }
+
+      if (this.outlawsRemaining <= 0) {
+        this.finishRaceWithStatus('cop_win');
+        return;
+      }
+
+      for (const r of this.riders) {
+        if (r.isPlayer || r.state === 'busted') continue;
+        if (r.finished || r.sample >= this.finishSample) {
+          this.escapedOutlawName = r.name;
+          this.finishRaceWithStatus('cop_escaped');
+          return;
+        }
+      }
+      return;
+    }
+
+    if (p.state === 'busted') {
       this.finishRaceWithStatus('busted');
     } else if (p.finished) {
       this.finishRaceWithStatus('finished');
@@ -1399,22 +1642,31 @@ export class RaceSimulation {
           const avgDs = Math.max(0.08, r.stats.topMph * 0.78 * 0.001526);
           estTicks = this.ticks + Math.floor(rem / avgDs);
         }
+        let timeStr = this.formatRaceTime(estTicks);
+        if (this.isPoliceMode && r.isPlayer) {
+          timeStr = `${this.bustedCount}/${this.totalOutlaws} BUSTS`;
+        } else if (r.state === 'wrecked') {
+          timeStr = 'WRECKED';
+        } else if (r.state === 'busted') {
+          timeStr = 'BUSTED';
+        } else if (this.isPoliceMode && status === 'cop_escaped' && r.name === this.escapedOutlawName) {
+          timeStr = 'ESCAPED (#1)';
+        }
         return {
           name: r.name,
           isPlayer: r.isPlayer,
           place: r.place,
-          timeStr:
-            r.state === 'wrecked'
-              ? 'WRECKED'
-              : r.state === 'busted'
-                ? 'BUSTED'
-                : this.formatRaceTime(estTicks)
+          timeStr
         };
       });
 
     setTimeout(() => {
       this.onRaceComplete({
         status,
+        isPoliceMode: this.isPoliceMode,
+        bustedCount: this.bustedCount,
+        totalOutlaws: this.totalOutlaws,
+        escapedOutlawName: this.escapedOutlawName,
         place: this.player.place,
         playerName: this.player.name,
         courseId: this.config.courseId,

@@ -12,20 +12,26 @@
   </head>
   <body>
     <div id="app">
-      <div id="viewport-shell">
+      <div id="viewport-shell" data-aspect="4:3">
         <div id="screen-stage">
           <canvas id="gl-canvas" width="640" height="480"></canvas>
           <canvas id="ui-canvas" width="640" height="480"></canvas>
         </div>
 
-        <div id="top-bar" aria-label="Toolbar">
-          <span class="bar-badge">ROAD RASH &bull; Made By Soham</span>
+        <div id="top-bar" aria-label="Navigation & Display Toolbar">
+          <div class="bar-left">
+            <span class="bar-badge">ROAD RASH &bull; Made By Soham</span>
+            <button id="btn-menu" type="button" title="Main Menu / Pause Race (ESC)">MENU</button>
+            <button id="btn-police" type="button" class="police-pill" title="Play Special Police Interceptor Mode!">POLICE MODE</button>
+          </div>
           <span id="controls-hint" class="bar-hint">
-            <b>ARROWS/WASD</b> Ride &bull;
-            <b>SPACE/Z/C</b> Punch/Club/Chain &bull; <b>X/SHIFT</b> Boot Kick &bull;
-            <b>N/B/CTRL</b> Nitro Boost &bull; <b>F10</b> HUD &bull; <b>ESC</b> Pause
+            <b>WASD/ARROWS</b> Ride &bull;
+            <b>SPACE/Z/C</b> Swing &bull; <b>Q/1-4</b> Weapons &bull;
+            <b>X</b> Kick &bull; <b>N</b> Nitro &bull; <b>ESC</b> Pause
           </span>
           <div class="bar-actions">
+            <button id="btn-aspect-43" type="button" class="active-opt" title="Original 1996 4:3 Aspect Ratio (640x480)">4:3 OG</button>
+            <button id="btn-aspect-169" type="button" title="True 16:9 Widescreen FOV (854x480)">16:9 WIDE</button>
             <button id="btn-music" type="button" title="Toggle Rock Music (M = Next Track)">MUSIC: ON</button>
             <button id="btn-mute" type="button" title="Mute Sound Effects">SFX: ON</button>
             <button id="btn-fullscreen" type="button" title="Toggle Fullscreen (F11)">FULLSCREEN</button>
@@ -39,6 +45,7 @@
           </div>
           <div class="touch-cluster touch-right">
             <div class="touch-row">
+              <button type="button" data-action="weapon" class="t-btn t-wpn">WPN</button>
               <button type="button" data-action="punchL" class="t-btn t-combat">SWING</button>
               <button type="button" data-action="kick" class="t-btn t-kick">KICK</button>
               <button type="button" data-action="nitro" class="t-btn t-nitro">NITRO</button>

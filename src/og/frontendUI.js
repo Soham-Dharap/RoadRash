@@ -3,6 +3,7 @@
 // so all 1996 .RRI photography, showroom bikes, postcards & caricatures stay 100% unobstructed!
 
 import { MUSIC_TRACKS } from './audioEngine.js';
+import { OG_WEAPONS } from './raceSimulation.js';
 
 const SAVE_STORAGE_KEY = 'roadrash_96_biggame_v3';
 const INITIAL_MILLION_CASH = 1000000;
@@ -12,7 +13,17 @@ export const COURSE_DEFS = [
   { id: 1, key: 'HIWAY', post: 'sierra', qpost: 'qsierra', nameSlot: 17, descSlot: 22 },
   { id: 2, key: 'MEDLY', post: 'penin', qpost: 'qpenin', nameSlot: 18, descSlot: 23 },
   { id: 3, key: 'NAPA', post: 'napa', qpost: 'qnapa', nameSlot: 19, descSlot: 24 },
-  { id: 4, key: 'CANYN', post: 'pch', qpost: 'qpch', nameSlot: 20, descSlot: 25 }
+  { id: 4, key: 'CANYN', post: 'pch', qpost: 'qpch', nameSlot: 20, descSlot: 25 },
+  {
+    id: 5,
+    key: 'INTERCEPT',
+    post: 'sierrar',
+    qpost: 'qsierrar',
+    customName: 'Interceptor Beltway',
+    customDesc:
+      'Custom 6-lane Metro Freeway, twin echo highway tunnels, Pacific cliff drop-offs & Sierra sweepers built for high-speed Police Interceptor takedowns!',
+    customMiles: [5.5, 7.2, 9.0, 10.8, 12.6]
+  }
 ];
 
 export const CHAR_DEFS = [
@@ -52,19 +63,31 @@ export function bikeDefById(bikeId) {
 }
 
 export class FrontendUI {
-  constructor(assets, audio, onStartRace) {
+  constructor(assets, audio, onStartRace, displayCallbacks = {}) {
     this.assets = assets;
     this.audio = audio;
     this.onStartRace = onStartRace;
+    this.displayCallbacks = {
+      getAspect: () => '4:3',
+      setAspect: () => {},
+      toggleFullscreen: () => {},
+      isFullscreen: () => false,
+      ...displayCallbacks
+    };
 
     this.screen = 'splash';
     this.returnScreen = 'main';
-    this.focus = 0;
-    this.mode = 'thrash'; // 'thrash' | 'biggame'
+    this.focus = 3; // Default focus on "Start Game" button on splash!
+    this.mode = 'thrash'; // 'thrash' | 'biggame' | 'copchase'
 
     this.thrashLevel = 0; // 0..4 -> Level 1..5
-    this.thrashCourse = 0; // 0..4
-    this.thrashBikeSlot = 11; // Default Thrash bike unlocked (Diablo Vipera, or cycle all 15 w/ TAB!)
+    this.thrashCourse = 0; // 0..5
+    this.thrashBikeSlot = 11; // Default Thrash bike unlocked (Diablo Vipera, or cycle all 15!)
+    this.selectedWeapon = 2; // All OG weapons unlocked! Default Steel Chain (or Police Baton in Police Mode)
+
+    this.policeLevel = 1; // Level 2 default for exciting chase pacing
+    this.policeCourse = 5; // Default to brand-new Interceptor Beltway!
+    this.policeWeapon = 3; // Police Nightstick default!
 
     this.career = this.loadCareer() || this.createCareer(0);
 
@@ -80,6 +103,7 @@ export class FrontendUI {
     this.editingName = false;
     this.lastRaceResult = null;
     this.loadingInfo = null;
+    this.lastOffsetX = 0;
 
     this.hitRects = [];
   }
@@ -143,9 +167,24 @@ export class FrontendUI {
     return Math.floor(this.bikePrice(this.career.bikeId) * 0.5);
   }
 
+  courseName(cdef) {
+    if (!cdef) return 'The City';
+    return cdef.customName || this.assets.str(cdef.nameSlot) || cdef.key;
+  }
+
+  courseDesc(cdef) {
+    if (!cdef) return '';
+    if (cdef.customDesc) return cdef.customDesc;
+    return this.assets.str(cdef.descSlot).split('Length')[0].replace(/\n+/g, ' ').trim();
+  }
+
   courseMiles(level, courseId) {
+    const cdef = COURSE_DEFS[courseId];
+    if (cdef?.customMiles) {
+      return (cdef.customMiles[level] ?? 7.2).toFixed(1);
+    }
     const arr = this.assets.frontend?.courseLength;
-    const raw = arr ? arr[level * 5 + courseId] : 55;
+    const raw = arr ? arr[level * 5 + (courseId % 5)] : 55;
     return (raw / 10).toFixed(1);
   }
 
@@ -168,7 +207,11 @@ export class FrontendUI {
       this.assets.preloadUI('olleys.jpg');
     } else if (nextScreen === 'char_select') {
       CHAR_DEFS.forEach((c) => this.assets.preloadUI(`chars/${c.slug}-n.jpg`));
-    } else if (nextScreen === 'thrash_tracks' || nextScreen === 'biggame_tracks') {
+    } else if (
+      nextScreen === 'thrash_tracks' ||
+      nextScreen === 'biggame_tracks' ||
+      nextScreen === 'police_tracks'
+    ) {
       this.assets.preloadUI('postcard.jpg');
       COURSE_DEFS.forEach((c) => {
         this.assets.preloadUI(`postcard/${c.post}.jpg`);
@@ -202,38 +245,83 @@ export class FrontendUI {
 
   currentMenuSpec() {
     const S = (id) => this.assets.str(id);
+    const curAspect = this.displayCallbacks.getAspect();
+    const isFull = this.displayCallbacks.isFullscreen();
 
+    // Starting Splash Screen with interactive 4:3 OG / 16:9 Widescreen / Fullscreen / Start buttons!
     if (this.screen === 'splash') {
-      return { bg: 'splash.jpg', items: [] };
+      return {
+        bg: 'splash.jpg',
+        items: [
+          {
+            rect: [12, 426, 138, 44],
+            centered: true,
+            label: curAspect === '4:3' ? '★ 4:3 OG' : '4:3 OG',
+            desc: '',
+            action: () => {
+              this.displayCallbacks.setAspect('4:3');
+            }
+          },
+          {
+            rect: [158, 426, 152, 44],
+            centered: true,
+            label: curAspect === '16:9' ? '★ 16:9 Wide' : '16:9 Wide',
+            desc: '',
+            action: () => {
+              this.displayCallbacks.setAspect('16:9');
+            }
+          },
+          {
+            rect: [318, 426, 146, 44],
+            centered: true,
+            label: isFull ? 'Exit Full' : 'Fullscreen',
+            desc: '',
+            action: () => {
+              this.displayCallbacks.toggleFullscreen();
+            }
+          },
+          {
+            rect: [472, 426, 156, 44],
+            centered: true,
+            label: 'Start Game ▶',
+            desc: '',
+            action: () => {
+              this.audio.playSfx('punchhea', { volume: 0.65 });
+              this.audio.playMusicTrack('KLOWN');
+              this.go('main', 0);
+            }
+          }
+        ]
+      };
     }
 
-    // Screen 9: Main Menu (4 horizontal dock buttons across y = 420..480!)
+    // Screen 9: Main Menu (5 horizontal dock buttons across y = 420..480, biker 100% uncovered!)
     if (this.screen === 'main') {
       const hasSave = Boolean(this.career?.active);
       return {
         bg: 'main.jpg',
         showAuthorBadge: true,
-        titleRect: [14, 14, 306, 78],
+        titleRect: [14, 14, 306, 76],
         title: S(70) || 'Game Mode',
-        titleFontSize: 54,
-        descRect: [14, 102, 306, 232],
-        descFontSize: 21,
+        titleFontSize: 52,
+        descRect: [14, 98, 306, 250],
+        descFontSize: 20,
         items: [
           {
-            rect: [0, 420, 160, 60],
-            label: S(2) || 'Thrash Mode',
-            desc: S(3),
+            rect: [0, 420, 128, 60],
+            label: 'Thrash',
+            desc: `${S(3)}\n\nAll 15 Bikes + All 4 OG Weapons Unlocked + Nitro Speed Boost!`,
             action: () => {
               this.mode = 'thrash';
               this.go('thrash_tracks', this.thrashCourse);
             }
           },
           {
-            rect: [160, 420, 160, 60],
-            label: S(4) || 'Big Game',
+            rect: [128, 420, 128, 60],
+            label: 'Big Game',
             desc: hasSave
-              ? `${S(5)}\n\nSaved Career: ${this.career.playerName} • Lv.${this.career.level + 1} • $${this.career.cash.toLocaleString()}`
-              : S(5),
+              ? `${S(5)}\n\nSaved: ${this.career.playerName} • Lv.${this.career.level + 1} • $${this.career.cash.toLocaleString()}`
+              : `${S(5)}\n\nStarts with $1,000,000 Cash & All 15 Bikes Unlocked!`,
             action: () => {
               this.mode = 'biggame';
               if (this.career.active) this.go('street', 0);
@@ -241,18 +329,26 @@ export class FrontendUI {
             }
           },
           {
-            rect: [320, 420, 160, 60],
-            label: 'How To Rash',
-            desc: 'View controls & OG Road Rash combat mechanics + Nitro Speed Boost on ALL bikes & $1,000,000 Bankroll unlocking all 15 motorcycles!',
+            rect: [256, 420, 134, 60],
+            label: 'Police Mode',
+            desc: 'SPECIAL POLICE INTERCEPTOR MODE!\nRide as Highway Patrol Officer on the new Interceptor Beltway (or any track) and BUST ALL 14 RACERS before anyone wins!',
             action: () => {
-              this.returnScreen = 'main';
-              this.go('help', 0);
+              this.mode = 'copchase';
+              this.go('police_tracks', this.policeCourse);
             }
           },
           {
-            rect: [480, 420, 160, 60],
+            rect: [390, 420, 125, 60],
+            label: curAspect === '16:9' ? '16:9 Wide' : '4:3 OG',
+            desc: `Current Display: ${curAspect === '16:9' ? '16:9 Widescreen (854x480 True Wide FOV)' : '4:3 Original 1996 Aspect (640x480)'}.\nClick to switch between 4:3 OG and 16:9 Widescreen! (F11 = Fullscreen)`,
+            action: () => {
+              this.displayCallbacks.setAspect(curAspect === '16:9' ? '4:3' : '16:9');
+            }
+          },
+          {
+            rect: [515, 420, 125, 60],
             label: S(6) || 'Restroom',
-            desc: S(7),
+            desc: 'Options, Weapon & Bike Loadout, Jukebox, Fullscreen, and How To Rash Controls Guide.',
             action: () => {
               this.returnScreen = 'main';
               this.go('restroom', 0);
@@ -265,24 +361,23 @@ export class FrontendUI {
     if (this.screen === 'help') {
       return {
         bg: 'main.jpg',
-        titleRect: [16, 12, 608, 68],
-        title: 'Controls & Combat',
-        titleFontSize: 48,
+        titleRect: [16, 12, 608, 64],
+        title: 'Controls, Weapons & Modes',
+        titleFontSize: 44,
         customBody: [
-          'RIDE & STEER: Arrow Keys or W/A/S/D  •  UP/W = Throttle, DOWN/S = Brakes, LEFT/RIGHT = Lean.',
-          'NITRO BOOST (ALL 15 BIKES!): Press N, B, CTRL or Double-Tap UP/W to fire Nitro Speed Boost!',
-          '$1,000,000 BANKROLL: All 15 Rat, Sport & Super bikes unlocked! Buy/switch at Olley\'s or press TAB in Thrash!',
-          'SMART MELEE (SPACE or ENTER): Swings Fist, Club, or Chain toward the nearest rival beside you!',
-          'DIRECTIONAL SWINGS (Z = Left, C = Right): Aim punches, clubs & chains explicitly left or right.',
-          'WEAPON SNATCHING: Land a bare-knuckle punch right while an armed rival winds up to steal their Club or Chain!',
-          'BOOT KICK SHOVE (X or SHIFT): Physically shoves rival bikes sideways across lanes into oncoming cars & walls!',
-          'PEDESTRIANS & FALLEN BIKES: Clip jaywalkers on the sidewalk & ride upright over downed bikes!  •  F10 = HUD.'
+          'RIDE & STEER: Arrow Keys or W/A/S/D  •  N, B, CTRL or Double-Tap UP = Nitro Speed Boost (ALL Bikes!).',
+          'ALL OG WEAPONS UNLOCKED: Press Q, E, or Keys 1-4 mid-race to switch Fists, Club, Chain & Police Baton!',
+          'MELEE & BOOT KICK: SPACE/ENTER = Smart Swing  •  Z/C = Left/Right  •  X/SHIFT = Lateral Boot-Kick Shove!',
+          'POLICE MODE: Ride the Highway Patrol Interceptor & BUST ALL 14 RACERS before a single outlaw finishes!',
+          'NEW MAP — INTERCEPTOR BELTWAY: 6-lane Metro Freeway, twin echo tunnels & Pacific cliff drop-offs!',
+          '$1,000,000 BANKROLL: All 15 bikes unlocked at Olley\'s Showroom & selectable on Track Select!',
+          'DISPLAY & NAVIGATION: Switch 4:3 OG vs 16:9 Widescreen & Fullscreen anytime from Start/Top Bar!'
         ],
         items: [
           {
             rect: [0, 430, 640, 50],
             centered: true,
-            label: S(86) || 'Done',
+            label: '◀ Back',
             desc: '',
             action: () => this.go(this.returnScreen || 'main', 0)
           }
@@ -621,96 +716,179 @@ export class FrontendUI {
       };
     }
 
-    // Screens 10 & 27: Postcard Track Select (exact 3x2 bottom dock y = 420..480, right postcard 100% uncovered!)
-    if (this.screen === 'thrash_tracks' || this.screen === 'biggame_tracks') {
+    // Screens 10, 27 & Police Pursuit: Postcard Track Select (4x2 bottom dock y = 420..480, right postcard 100% uncovered!)
+    if (
+      this.screen === 'thrash_tracks' ||
+      this.screen === 'biggame_tracks' ||
+      this.screen === 'police_tracks'
+    ) {
       const isBig = this.screen === 'biggame_tracks';
-      const level = isBig ? this.career.level : this.thrashLevel;
-      const focusedCourse = this.focus < 5 ? COURSE_DEFS[this.focus] : null;
+      const isPolice = this.screen === 'police_tracks';
+      const level = isPolice ? this.policeLevel : isBig ? this.career.level : this.thrashLevel;
+      const focusedCourse = this.focus < COURSE_DEFS.length ? COURSE_DEFS[this.focus] : null;
 
       let rightPost = isBig ? 'postcard/klub.jpg' : 'postcard/resta.jpg';
       if (focusedCourse) {
-        const qual = isBig && this.career.qualified[focusedCourse.id];
+        const qual = isBig && focusedCourse.id < 5 && this.career.qualified[focusedCourse.id];
         rightPost = `postcard/${qual ? focusedCourse.qpost : focusedCourse.post}.jpg`;
       }
 
-      const trackRects = [
-        [0, 420, 213, 30],
-        [0, 450, 213, 30],
-        [213, 420, 213, 30],
-        [213, 450, 213, 30],
-        [426, 420, 214, 30]
+      // Clean 4x2 grid across y = 420..480 (160px x 30px each — 8 buttons total!)
+      const gridRects = [
+        [0, 420, 160, 30],
+        [0, 450, 160, 30],
+        [160, 420, 160, 30],
+        [160, 450, 160, 30],
+        [320, 420, 160, 30],
+        [320, 450, 160, 30],
+        [480, 420, 160, 30],
+        [480, 450, 160, 30]
       ];
+
+      const activeWeaponId = isPolice ? this.policeWeapon : this.selectedWeapon;
+      const wDef = OG_WEAPONS[activeWeaponId] || OG_WEAPONS[0];
+      const thrashBikeDef = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
+      const activeBikeName = isPolice
+        ? 'Highway Patrol Interceptor'
+        : isBig
+          ? S(bikeDefById(this.career.bikeId).nameSlot)
+          : S(thrashBikeDef.nameSlot);
 
       return {
         bg: 'postcard.jpg',
         overlay: { path: rightPost, x: 243, y: 0 },
-        descRect: [14, 16, 216, 388],
-        descFontSize: 20,
+        descRect: [12, 12, 222, 398],
+        descFontSize: 18,
         items: [
           ...COURSE_DEFS.map((c, idx) => {
-            const qual = isBig && this.career.qualified[c.id];
+            const qual = isBig && c.id < 5 && this.career.qualified[c.id];
             const miles = this.courseMiles(level, c.id);
-            const rawDesc = S(c.descSlot).split('Length')[0].replace(/\n+/g, ' ').trim();
-            const thrashBikeDef = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
-            const activeBikeName = isBig
-              ? S(bikeDefById(this.career.bikeId).nameSlot)
-              : S(thrashBikeDef.nameSlot);
+            const rawDesc = this.courseDesc(c);
+            const cName = this.courseName(c);
+            const shortLabel =
+              c.id === 5
+                ? isPolice
+                  ? '★ Beltway (NEW)'
+                  : 'Beltway (NEW)'
+                : `${cName}${qual ? ' ★' : ''}`;
+            const modeLine = isPolice
+              ? `POLICE PURSUIT • Lv.${level + 1}\nBust ALL 14 Outlaws!\nWpn: ${wDef.name} [Q]`
+              : `Level ${level + 1}${qual ? ' (QUALIFIED)' : ''}${isBig && c.id === 5 ? ' (BONUS PURSE)' : ''}\nBike: ${activeBikeName}\nWpn: ${wDef.name} [Q]`;
             return {
-              rect: trackRects[idx],
-              label: `${S(c.nameSlot)}${qual ? ' ★' : ''}`,
-              desc: `${S(c.nameSlot)}\nLevel ${level + 1}${qual ? ' (QUALIFIED)' : ''}\nBike: ${activeBikeName} [NITRO]${!isBig ? ' (TAB to switch)' : ''}\n\n${rawDesc}\n\nLength: ${miles} ${S(27)}`,
+              rect: gridRects[idx],
+              label: shortLabel,
+              desc: `${cName}\n${modeLine}\n\n${rawDesc}\n\nLength: ${miles} ${S(27) || 'miles'}`,
               action: () => {
-                if (!isBig) this.thrashCourse = c.id;
+                if (isPolice) this.policeCourse = c.id;
+                else if (!isBig) this.thrashCourse = c.id;
                 this.launchRace(c.id);
               }
             };
           }),
+          // Slot 6: Loadout Quick-Toggle (Weapon / Bike / Level clickable button!)
+          isPolice
+            ? {
+                rect: gridRects[6],
+                label: `Wpn: ${wDef.key}`,
+                desc: `Equipped Weapon: ${wDef.name} (All 4 OG Weapons Unlocked!).\nClick to cycle Weapon, or press TAB to change Pursuit Level (Currently Lv.${this.policeLevel + 1}).`,
+                action: () => {
+                  this.policeWeapon = (this.policeWeapon + 1) % OG_WEAPONS.length;
+                }
+              }
+            : isBig
+              ? {
+                  rect: gridRects[6],
+                  label: `Wpn: ${wDef.key}`,
+                  desc: `Starting Weapon: ${wDef.name} (All 4 OG Weapons Unlocked — switch anytime mid-race with Q/E or 1-4!).\nClick to cycle Fists, Club, Chain & Police Baton!`,
+                  action: () => {
+                    this.selectedWeapon = (this.selectedWeapon + 1) % OG_WEAPONS.length;
+                  }
+                }
+              : {
+                  rect: gridRects[6],
+                  label: `Bike/Wpn ↻`,
+                  desc: `Bike: ${activeBikeName} [NITRO] (15/15 Unlocked)\nWeapon: ${wDef.name} [Q to cycle]\nLevel: ${level + 1}\n\nClick to switch Bike (or press TAB for Bike, Q for Weapon)!`,
+                  action: () => {
+                    this.thrashBikeSlot = (this.thrashBikeSlot + 1) % SHOWROOM_BIKES.length;
+                  }
+                },
+          // Slot 7: Back Navigation Button
           {
-            rect: [426, 450, 214, 30],
-            label: isBig ? S(48) || 'Der Panzer Klub' : S(86) || 'Main Menu',
+            rect: gridRects[7],
+            label: isBig ? '◀ Panzer Klub' : '◀ Main Menu',
             desc: isBig
               ? 'Return to Der Panzer Klub.'
-              : `Thrash Level ${level + 1} • Press TAB to pick any of the 15 Unlocked Bikes!\nReturn to Main Menu or visit Restroom.`,
+              : isPolice
+                ? 'Return to Main Menu. (Tip: Press TAB here to change Pursuit Level 1–5!)'
+                : 'Return to Main Menu.',
             action: () => {
               if (isBig) this.go('panzer', 2);
-              else this.go('main', 0);
+              else this.go('main', isPolice ? 2 : 0);
             }
           }
         ]
       };
     }
 
-    // Screen 16: Restroom (full-width centered rows like draw_scale1 w == 0!)
+    // Screen 16: Restroom (Options, Display Ratio, Weapon & Bike Loadout, Jukebox & Help)
     if (this.screen === 'restroom') {
       const trackName = MUSIC_TRACKS[this.audio.currentTrackIndex] || 'GRUNGE1';
       const alias = this.career.playerName || 'Axle';
       const thrashBike = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
+      const wDef = OG_WEAPONS[this.selectedWeapon] || OG_WEAPONS[2];
       return {
         bg: this.restroomBg,
-        titleRect: [0, 12, 640, 64],
-        title: S(6) || 'Restroom',
-        titleFontSize: 52,
+        titleRect: [0, 8, 640, 56],
+        title: S(6) || 'Restroom & Options',
+        titleFontSize: 46,
         items: [
           {
-            rect: [0, 92, 640, 32],
+            rect: [0, 72, 320, 32],
             centered: true,
-            label: `Thrash Level: Level ${this.thrashLevel + 1}`,
+            label: `Display Ratio: ${curAspect === '16:9' ? '16:9 Wide' : '4:3 OG'}`,
+            desc: '',
+            action: () => {
+              this.displayCallbacks.setAspect(curAspect === '16:9' ? '4:3' : '16:9');
+            }
+          },
+          {
+            rect: [320, 72, 320, 32],
+            centered: true,
+            label: isFull ? 'Windowed Mode' : 'Fullscreen Mode',
+            desc: '',
+            action: () => {
+              this.displayCallbacks.toggleFullscreen();
+            }
+          },
+          {
+            rect: [0, 108, 320, 32],
+            centered: true,
+            label: `Thrash Level: Lv.${this.thrashLevel + 1}`,
             desc: '',
             action: () => {
               this.thrashLevel = (this.thrashLevel + 1) % 5;
             }
           },
           {
-            rect: [0, 130, 640, 32],
+            rect: [320, 108, 320, 32],
             centered: true,
-            label: `Thrash Bike (All 15 Unlocked): ${S(thrashBike.nameSlot)}`,
+            label: `Start Weapon: ${wDef.name}`,
+            desc: '',
+            action: () => {
+              this.selectedWeapon = (this.selectedWeapon + 1) % OG_WEAPONS.length;
+            }
+          },
+          {
+            rect: [0, 144, 640, 32],
+            centered: true,
+            label: `Thrash Bike (15 Unlocked): ${S(thrashBike.nameSlot)}`,
             desc: '',
             action: () => {
               this.thrashBikeSlot = (this.thrashBikeSlot + 1) % SHOWROOM_BIKES.length;
             }
           },
           {
-            rect: [0, 168, 640, 32],
+            rect: [0, 180, 640, 32],
             centered: true,
             label: this.editingName
               ? `Player Name: ${alias}_  (Type & Enter)`
@@ -722,7 +900,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 206, 640, 32],
+            rect: [0, 216, 640, 32],
             centered: true,
             label: `Jukebox Track: ${trackName}`,
             desc: '',
@@ -731,7 +909,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 244, 640, 32],
+            rect: [0, 252, 320, 32],
             centered: true,
             label: `Rock Music: ${this.audio.musicEnabled ? 'ON' : 'OFF'}`,
             desc: '',
@@ -740,18 +918,18 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 282, 640, 32],
+            rect: [320, 252, 320, 32],
             centered: true,
-            label: `Sound Effects: ${this.audio.sfxEnabled ? 'ON' : 'OFF'}`,
+            label: `Sound FX: ${this.audio.sfxEnabled ? 'ON' : 'OFF'}`,
             desc: '',
             action: () => {
               this.audio.toggleSfx();
             }
           },
           {
-            rect: [0, 320, 640, 32],
+            rect: [0, 288, 640, 32],
             centered: true,
-            label: 'Start New Big Game Career ($1,000,000)',
+            label: 'Reset Big Game Career ($1,000,000 Fresh Start)',
             desc: '',
             action: () => {
               this.resetCareer();
@@ -760,18 +938,18 @@ export class FrontendUI {
             }
           },
           {
-            rect: [0, 358, 640, 32],
+            rect: [0, 324, 640, 32],
             centered: true,
-            label: 'Controls & Combat Guide',
+            label: 'Controls, Weapons & Police Mode Guide',
             desc: '',
             action: () => {
               this.go('help', 0);
             }
           },
           {
-            rect: [0, 420, 640, 60],
+            rect: [0, 424, 640, 56],
             centered: true,
-            label: S(86) || 'Done',
+            label: `◀ ${S(86) || 'Done'}`,
             desc: '',
             action: () => this.go(this.returnScreen || 'main', 0)
           }
@@ -785,10 +963,14 @@ export class FrontendUI {
       return {
         bg: `chars/${ch.slug}-f.jpg`,
         titleRect: [80, 168, 480, 76],
-        title: S(206) || 'GAME LOADING',
-        descRect: [120, 256, 400, 76],
+        title: this.mode === 'copchase' ? 'UNIT DISPATCHING' : S(206) || 'GAME LOADING',
+        descRect: [100, 256, 440, 84],
         items: [],
-        fixedDesc: `${this.loadingInfo?.courseName || ''}\n${S(207) || 'Get ready to race!'}`
+        fixedDesc: `${this.loadingInfo?.courseName || ''}\n${
+          this.mode === 'copchase'
+            ? 'Siren Hot! Bust all 14 outlaw racers before anyone crosses the finish!'
+            : S(207) || 'Get ready to race!'
+        }`
       };
     }
 
@@ -820,7 +1002,7 @@ export class FrontendUI {
       return {
         bg: r.art || 'results/win1.jpg',
         titleRect: [16, 8, 608, 56],
-        title: S(183) || 'Race Results',
+        title: this.mode === 'copchase' ? 'Pursuit Report' : S(183) || 'Race Results',
         titleFontSize: 44,
         standings: r.standings || [],
         items: [
@@ -837,6 +1019,8 @@ export class FrontendUI {
                 } else {
                   this.go('panzer', 2);
                 }
+              } else if (this.mode === 'copchase') {
+                this.go('police_tracks', this.policeCourse);
               } else {
                 this.go('thrash_tracks', this.thrashCourse);
               }
@@ -897,15 +1081,22 @@ export class FrontendUI {
   launchRace(courseId) {
     const cdef = COURSE_DEFS[courseId] || COURSE_DEFS[0];
     const isBig = this.mode === 'biggame';
-    const level = isBig ? this.career.level : this.thrashLevel;
+    const isPolice = this.mode === 'copchase';
+    const level = isPolice ? this.policeLevel : isBig ? this.career.level : this.thrashLevel;
     const ch = CHAR_DEFS[isBig ? this.career.charIdx : 0] || CHAR_DEFS[0];
 
     const thrashBikeDef = SHOWROOM_BIKES[this.thrashBikeSlot] || SHOWROOM_BIKES[11];
-    const bikeId = isBig ? this.career.bikeId : thrashBikeDef.bikeId;
-    const playerName = isBig ? this.career.playerName : this.career.playerName || this.assets.str(ch.nameSlot) || 'Axle';
+    const bikeId = isPolice ? 9 : isBig ? this.career.bikeId : thrashBikeDef.bikeId;
+    const weaponId = isPolice ? this.policeWeapon : this.selectedWeapon;
+    const playerName = isBig
+      ? this.career.playerName
+      : this.career.playerName || this.assets.str(ch.nameSlot) || 'Axle';
+    const cName = this.courseName(cdef);
 
     this.loadingInfo = {
-      courseName: `${this.assets.str(cdef.nameSlot)} — Level ${level + 1}`
+      courseName: isPolice
+        ? `${cName} — Police Pursuit Lv.${level + 1}`
+        : `${cName} — Level ${level + 1}`
     };
     this.go('loading', 0);
 
@@ -915,8 +1106,9 @@ export class FrontendUI {
         level,
         courseId,
         courseKey: cdef.key,
-        courseName: this.assets.str(cdef.nameSlot),
+        courseName: cName,
         bikeId,
+        weaponId,
         playerName,
         female: ch.female,
         charIdx: ch.id
@@ -933,7 +1125,8 @@ export class FrontendUI {
     };
 
     const isBig = this.mode === 'biggame';
-    const level = isBig ? this.career.level : this.thrashLevel;
+    const isPolice = this.mode === 'copchase' || outcome.isPoliceMode;
+    const level = isPolice ? this.policeLevel : isBig ? this.career.level : this.thrashLevel;
     const prizes =
       this.assets.frontend?.career?.prize || [1000, 750, 500, 400, 300, 250, 200, 160, 130, 100, 70, 50, 30, 20, 10];
     const levelMult = [1, 2, 4, 8, 15][level] || 1;
@@ -943,7 +1136,16 @@ export class FrontendUI {
     let message = '';
     let gameOver = false;
 
-    if (outcome.status === 'wrecked') {
+    if (outcome.status === 'cop_win') {
+      art = pick6('bust');
+      headline = 'HIGHWAY SECURED!';
+      const bounty = 25000 * levelMult;
+      message = `ALL ${outcome.totalOutlaws || 14} OUTLAW RACERS BUSTED! Zero racers escaped! Department Bounty: +$${bounty.toLocaleString()}`;
+    } else if (outcome.status === 'cop_escaped') {
+      art = pick6('lose');
+      headline = 'OUTLAW ESCAPED!';
+      message = `${outcome.escapedOutlawName || 'An outlaw'} crossed the finish line! You busted ${outcome.bustedCount || 0}/${outcome.totalOutlaws || 14} racers — use Nitro [N] to intercept the leader!`;
+    } else if (outcome.status === 'wrecked') {
       art = pick6('wreck');
       headline = S(176) || 'WRECKED!';
       const repair = Math.max(80, Math.floor(this.bikePrice(isBig ? this.career.bikeId : 1) * 0.12));
@@ -958,7 +1160,9 @@ export class FrontendUI {
           this.saveCareer();
         }
       } else {
-        message = S(192);
+        message = isPolice
+          ? `Patrol Interceptor wrecked! Busted ${outcome.bustedCount || 0}/${outcome.totalOutlaws || 14} outlaws before going down.`
+          : S(192);
       }
     } else if (outcome.status === 'busted') {
       art = pick6('bust');
@@ -993,7 +1197,9 @@ export class FrontendUI {
         if (isBig) {
           this.career.cash += purse;
           this.career.wins += 1;
-          this.career.qualified[outcome.courseId] = true;
+          if (outcome.courseId >= 0 && outcome.courseId < 5) {
+            this.career.qualified[outcome.courseId] = true;
+          }
           if (this.career.qualified.every(Boolean)) {
             if (this.career.level < 4) {
               const lvlArt = `results/level${this.career.level + 1}.jpg`;
@@ -1073,13 +1279,6 @@ export class FrontendUI {
 
   onKeyDown(e) {
     this.audio.ensureContext();
-    if (this.screen === 'splash') {
-      this.audio.playSfx('punchhea', { volume: 0.65 });
-      this.audio.playMusicTrack('KLOWN');
-      this.go('main', 0);
-      e.preventDefault();
-      return;
-    }
 
     // Live Player Name typing inside Restroom
     if (this.editingName) {
@@ -1100,11 +1299,36 @@ export class FrontendUI {
     const items = spec.items || [];
     if (!items.length) return;
 
-    if (e.code === 'Tab' && this.screen === 'thrash_tracks') {
-      const step = e.shiftKey ? -1 : 1;
-      this.thrashBikeSlot =
-        (this.thrashBikeSlot + step + SHOWROOM_BIKES.length) % SHOWROOM_BIKES.length;
-      this.audio.playSfx('punchlig', { volume: 0.55, rate: 1.15 });
+    if (e.code === 'Tab') {
+      if (this.screen === 'thrash_tracks') {
+        const step = e.shiftKey ? -1 : 1;
+        this.thrashBikeSlot =
+          (this.thrashBikeSlot + step + SHOWROOM_BIKES.length) % SHOWROOM_BIKES.length;
+        this.audio.playSfx('punchlig', { volume: 0.55, rate: 1.15 });
+        e.preventDefault();
+        return;
+      }
+      if (this.screen === 'police_tracks') {
+        const step = e.shiftKey ? -1 : 1;
+        this.policeLevel = (this.policeLevel + step + 5) % 5;
+        this.audio.playSfx('punchlig', { volume: 0.55, rate: 1.15 });
+        e.preventDefault();
+        return;
+      }
+    }
+
+    if (
+      e.code === 'KeyQ' &&
+      (this.screen === 'thrash_tracks' ||
+        this.screen === 'biggame_tracks' ||
+        this.screen === 'police_tracks')
+    ) {
+      if (this.screen === 'police_tracks') {
+        this.policeWeapon = (this.policeWeapon + 1) % OG_WEAPONS.length;
+      } else {
+        this.selectedWeapon = (this.selectedWeapon + 1) % OG_WEAPONS.length;
+      }
+      this.audio.playSfx('swishcha', { volume: 0.5, rate: 1.1 });
       e.preventDefault();
       return;
     }
@@ -1130,7 +1354,7 @@ export class FrontendUI {
       items[this.focus]?.action();
       e.preventDefault();
     } else if (e.code === 'Escape' || e.code === 'Backspace') {
-      if (this.screen !== 'main') {
+      if (this.screen !== 'main' && this.screen !== 'splash') {
         this.audio.playSfx('swishgen', { volume: 0.45, rate: 0.9 });
         items[items.length - 1]?.action();
       }
@@ -1138,7 +1362,8 @@ export class FrontendUI {
     }
   }
 
-  onPointerMove(x640, y480) {
+  onPointerMove(canvasX, y480) {
+    const x640 = canvasX - this.lastOffsetX;
     for (let i = 0; i < this.hitRects.length; i++) {
       const [rx, ry, rw, rh] = this.hitRects[i];
       if (x640 >= rx && x640 <= rx + rw && y480 >= ry && y480 <= ry + rh) {
@@ -1151,16 +1376,11 @@ export class FrontendUI {
     }
   }
 
-  onPointerClick(x640, y480) {
+  onPointerClick(canvasX, y480) {
     this.audio.ensureContext();
-    if (this.screen === 'splash') {
-      this.audio.playSfx('punchhea', { volume: 0.65 });
-      this.audio.playMusicTrack('KLOWN');
-      this.go('main', 0);
-      return;
-    }
-
+    const x640 = canvasX - this.lastOffsetX;
     const spec = this.currentMenuSpec();
+
     for (let i = 0; i < this.hitRects.length; i++) {
       const [rx, ry, rw, rh] = this.hitRects[i];
       if (x640 >= rx && x640 <= rx + rw && y480 >= ry && y480 <= ry + rh) {
@@ -1170,16 +1390,44 @@ export class FrontendUI {
         return;
       }
     }
+
+    // Clicking anywhere on the Splash artwork above the bottom display bar starts the game too!
+    if (this.screen === 'splash' && y480 < 418) {
+      this.audio.playSfx('punchhea', { volume: 0.65 });
+      this.audio.playMusicTrack('KLOWN');
+      this.go('main', 0);
+    }
   }
 
-  // ==================== 640x480 RENDERING (draw_scale1) ====================
+  // ==================== 4:3 (640x480) & 16:9 (854x480) RENDERING ====================
 
   render(ctx) {
+    const viewW = ctx.canvas?.width || 640;
+    const offsetX = Math.floor((viewW - 640) * 0.5);
+    this.lastOffsetX = offsetX;
+
     ctx.save();
-    ctx.clearRect(0, 0, 640, 480);
+    ctx.clearRect(0, 0, viewW, 480);
 
     const spec = this.currentMenuSpec();
     const bgAsset = this.assets.getUI(spec.bg);
+
+    // Widescreen pillar backdrop: darkened atmospheric bleed + crisp frame border, zero stretch!
+    if (offsetX > 0) {
+      ctx.fillStyle = '#07080c';
+      ctx.fillRect(0, 0, viewW, 480);
+      if (bgAsset?.dark || bgAsset?.bright) {
+        ctx.save();
+        ctx.globalAlpha = 0.26;
+        ctx.drawImage(bgAsset.dark || bgAsset.bright, 0, 0, viewW, 480);
+        ctx.restore();
+      }
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.58)';
+      ctx.fillRect(0, 0, offsetX, 480);
+      ctx.fillRect(offsetX + 640, 0, viewW - (offsetX + 640), 480);
+    }
+
+    ctx.translate(offsetX, 0);
 
     if (bgAsset?.bright) {
       ctx.drawImage(bgAsset.bright, 0, 0, 640, 480);
@@ -1195,10 +1443,21 @@ export class FrontendUI {
       }
     }
 
-    // Starting Splash Screen ("Made By Soham" prominently displayed!)
+    const drawDarkRect = (x, y, w, h) => {
+      if (bgAsset?.dark && !spec.overlay) {
+        ctx.drawImage(bgAsset.dark, x, y, w, h, x, y, w, h);
+      } else {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
+        ctx.fillRect(x, y, w, h);
+      }
+      ctx.strokeStyle = 'rgba(255, 140, 60, 0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    };
+
+    // Starting Splash Screen ("Made By Soham" + interactive 4:3 / 16:9 / Fullscreen / Start buttons!)
     if (this.screen === 'splash') {
-      // Top-right / upper-banner signature badge
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.76)';
       ctx.fillRect(190, 12, 260, 38);
       ctx.strokeStyle = '#ff6432';
       ctx.lineWidth = 1.5;
@@ -1212,30 +1471,15 @@ export class FrontendUI {
       ctx.fillStyle = '#ff9d2e';
       ctx.fillText('Made By Soham', 320, 31);
 
-      // Pulsing "Click or Press Any Key" bar at bottom
-      const pulse = 0.65 + 0.35 * Math.sin(performance.now() * 0.005);
+      const pulse = 0.72 + 0.28 * Math.sin(performance.now() * 0.005);
       ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
-      ctx.fillRect(120, 434, 400, 34);
-      ctx.font = '20px RRFuturaBold, sans-serif';
+      ctx.fillRect(92, 392, 456, 26);
+      ctx.font = '15px RRFuturaBold, sans-serif';
       ctx.fillStyle = '#000000';
-      ctx.fillText('CLICK OR PRESS ANY KEY TO START', 322, 453);
+      ctx.fillText('CHOOSE DISPLAY RATIO BELOW OR PRESS ENTER TO RASH!', 322, 406);
       ctx.fillStyle = `rgba(225, 225, 128, ${pulse.toFixed(2)})`;
-      ctx.fillText('CLICK OR PRESS ANY KEY TO START', 320, 451);
-      ctx.restore();
-      return;
+      ctx.fillText('CHOOSE DISPLAY RATIO BELOW OR PRESS ENTER TO RASH!', 320, 405);
     }
-
-    const drawDarkRect = (x, y, w, h) => {
-      if (bgAsset?.dark && !spec.overlay) {
-        ctx.drawImage(bgAsset.dark, x, y, w, h, x, y, w, h);
-      } else {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.56)';
-        ctx.fillRect(x, y, w, h);
-      }
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.42)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-    };
 
     // Main Menu "Made By Soham" signature badge (top-right, clear of biker face!)
     if (spec.showAuthorBadge) {

@@ -1,7 +1,10 @@
 // Authentic 1996 Road Rash Cockpit HUD Renderer (matching hud.cpp::compose)
-// Renders BIGMETER.RRI behind the cockpit cutouts (134,424 / 292,380 / 456,424),
-// blits DASH_RAT / DASH_SPORT / DASH_SUPER over top, draws perspective elliptical needles,
-// RRBadloc LCD odometer/place/names, and equipped weapon / gear / nitro / cop status!
+// Supports both 4:3 OG (640x480) and 16:9 Widescreen (854x480) without stretching gauges!
+// Renders BIGMETER.RRI behind the cockpit cutouts, blits DASH_RAT / DASH_SPORT / DASH_SUPER,
+// draws perspective elliptical needles, RRBadloc LCD odometer/place/names,
+// unlocked OG Weapon indicator ([Q/E/1-4]), Nitro Boost, and Police Interceptor Radar!
+
+import { OG_WEAPONS } from './raceSimulation.js';
 
 export class HudRenderer {
   constructor(assets) {
@@ -15,9 +18,12 @@ export class HudRenderer {
   }
 
   render(ctx, sim, dashImg) {
+    const viewW = ctx.canvas?.width || 640;
+    const dashX = Math.floor((viewW - 640) * 0.5);
+
     ctx.save();
 
-    this.drawRaceBanners(ctx, sim);
+    this.drawRaceBanners(ctx, sim, viewW);
 
     if (this.mode === 2) {
       ctx.restore();
@@ -29,13 +35,35 @@ export class HudRenderer {
 
     if (this.mode === 1) {
       this.drawBadlocBox(ctx, `${speedMph} MPH`, 18, 436, 180, 36, 28, '#ffffff', 'left');
-      this.drawBadlocBox(ctx, `#${sim.playerPlace}/15`, 520, 436, 102, 36, 28, '#ffff00', 'right');
+      const rightLabel = sim.isPoliceMode
+        ? `LEFT: ${sim.outlawsRemaining}/14`
+        : `#${sim.playerPlace}/15`;
+      this.drawBadlocBox(ctx, rightLabel, viewW - 220, 436, 202, 36, 28, '#ffff00', 'right');
       ctx.restore();
       return;
     }
 
     const bm = this.assets.bigMeterOpaque || this.assets.bigMeter;
     const opp = sim.nearestRival;
+
+    // Widescreen side-fairing extensions so 16:9 cockpit spans edge-to-edge cleanly
+    if (dashX > 0 && dashImg) {
+      const wingTop = 480 - Math.min(82, dashImg.height - 28);
+      const grad = ctx.createLinearGradient(0, wingTop, 0, 480);
+      grad.addColorStop(0, 'rgba(18, 20, 24, 0.92)');
+      grad.addColorStop(1, '#07080a');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, wingTop, dashX + 4, 480 - wingTop);
+      ctx.fillRect(dashX + 636, wingTop, dashX + 8, 480 - wingTop);
+      ctx.strokeStyle = '#2d323a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, wingTop);
+      ctx.lineTo(dashX + 4, wingTop);
+      ctx.moveTo(dashX + 636, wingTop);
+      ctx.lineTo(viewW, wingTop);
+      ctx.stroke();
+    }
 
     // 1. Draw the 3 meters BEHIND the dashboard cutouts (hud.cpp lines 284-305)
     if (bm) {
@@ -45,93 +73,141 @@ export class HudRenderer {
         ? Math.max(0, Math.min(31, Math.round((opp.stamina / opp.maxStamina) * 31)))
         : 0;
 
-      // Vertical Player Stamina at (134, 424)
-      ctx.drawImage(bm, 11, 0, 51, 31, 134, 424, 51, 31);
+      // Vertical Player Stamina at (dashX + 134, 424)
+      ctx.drawImage(bm, 11, 0, 51, 31, dashX + 134, 424, 51, 31);
       if (31 - stamVal > 0) {
-        ctx.drawImage(bm, 11, 32, 51, 31 - stamVal, 134, 424, 51, 31 - stamVal);
+        ctx.drawImage(bm, 11, 32, 51, 31 - stamVal, dashX + 134, 424, 51, 31 - stamVal);
       }
 
-      // Horizontal Bike Condition at (292, 380)
-      ctx.drawImage(bm, 62, 16, 64, 18, 292, 380, 64, 18);
+      // Horizontal Bike Condition at (dashX + 292, 380)
+      ctx.drawImage(bm, 62, 16, 64, 18, dashX + 292, 380, 64, 18);
       if (condVal > 0) {
-        ctx.drawImage(bm, 62, 0, condVal * 2, 16, 293, 381, condVal * 2, 16);
+        ctx.drawImage(bm, 62, 0, condVal * 2, 16, dashX + 293, 381, condVal * 2, 16);
       }
 
-      // Vertical Nearest-Opponent Stamina at (456, 424)
-      ctx.drawImage(bm, 11, 0, 51, 31, 456, 424, 51, 31);
+      // Vertical Nearest-Opponent Stamina at (dashX + 456, 424)
+      ctx.drawImage(bm, 11, 0, 51, 31, dashX + 456, 424, 51, 31);
       if (31 - oppVal > 0) {
-        ctx.drawImage(bm, 11, 32, 51, 31 - oppVal, 456, 424, 51, 31 - oppVal);
+        ctx.drawImage(bm, 11, 32, 51, 31 - oppVal, dashX + 456, 424, 51, 31 - oppVal);
       }
     }
 
     // 2. Blit authentic 640x119/122 dashboard PNG over the meter cutouts
     if (dashImg) {
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(dashImg, 0, 480 - dashImg.height);
+      ctx.drawImage(dashImg, dashX, 480 - dashImg.height);
     }
 
     // 3. Elliptical perspective gauge needles (Speedo @ 250,449; 6-Speed Tach @ 388,441)
     const speedFrac = Math.max(0, Math.min(1.08, speedMph / 185));
     const speedAngle = -2.28 + speedFrac * 4.56;
-    this.drawNeedle(ctx, 250, 449, 44, 28, speedAngle);
+    this.drawNeedle(ctx, dashX + 250, 449, 44, 28, speedAngle);
 
     const rpmFrac = Math.max(0.05, Math.min(1.05, p.rpmNorm));
     const rpmAngle = -2.28 + rpmFrac * 4.48;
-    this.drawNeedle(ctx, 388, 441, 28, 20, rpmAngle);
+    this.drawNeedle(ctx, dashX + 388, 441, 28, 20, rpmAngle);
 
     // 4. Authentic Badloc LCD & name readouts matching hudLayout
-    this.drawBadlocBox(ctx, sim.config.playerName, 4, 447, 164, 30, 24, '#ffff00', 'right');
-    this.drawBadlocBox(ctx, String(sim.playerPlace), 16, 399, 624, 30, 25, '#ffffff', 'center');
+    const displayName = sim.isPoliceMode ? `OFC ${sim.config.playerName}` : sim.config.playerName;
+    this.drawBadlocBox(
+      ctx,
+      displayName,
+      dashX + 4,
+      447,
+      164,
+      30,
+      22,
+      sim.isPoliceMode ? '#66e6ff' : '#ffff00',
+      'right'
+    );
+    const centerLcd = sim.isPoliceMode ? String(sim.outlawsRemaining) : String(sim.playerPlace);
+    this.drawBadlocBox(ctx, centerLcd, dashX + 16, 399, 624, 30, 25, '#ffffff', 'center');
 
     // Odometer Distance (tenths of a mile: 33 samples = 0.1 mi, matching hud.cpp!)
     const tenths = Math.max(0, Math.floor((p.sample - sim.startSample) / 33));
     const distStr = `${String(Math.floor(tenths / 10)).padStart(2, '0')}.${tenths % 10}`;
-    this.drawBadlocBox(ctx, distStr, 0, 452, 345, 28, 22, '#ffffff', 'right');
+    this.drawBadlocBox(ctx, distStr, dashX, 452, 345, 28, 22, '#ffffff', 'right');
 
     // Nearest / Focused Opponent Name + Gap + Up/Down Arrow
     if (opp) {
-      this.drawBadlocBox(ctx, opp.name, 472, 447, 164, 30, 24, '#ffffff', 'left');
+      this.drawBadlocBox(ctx, opp.name, dashX + 472, 447, 164, 30, 24, '#ffffff', 'left');
       const dSamples = opp.sample - p.sample;
       const ahead = dSamples >= 0;
       const gapMiles = Math.min(9.999, Math.abs(dSamples) / 330);
       const gapStr = gapMiles.toFixed(3);
       const gapColor = ahead ? '#e71000' : '#28a31c';
-      this.drawBadlocBox(ctx, gapStr, 436, 394, 196, 28, 22, gapColor, 'left');
-      this.drawGapArrow(ctx, 420, ahead ? 401 : 403, ahead);
+      this.drawBadlocBox(ctx, gapStr, dashX + 436, 394, 196, 28, 22, gapColor, 'left');
+      this.drawGapArrow(ctx, dashX + 420, ahead ? 401 : 403, ahead);
     }
 
-    // 5. Compact top-left status badges (Miles Left, Gear, Equipped Weapon, Nitro)
+    // 5. Top-left status badges (Miles Left, Gear, Unlocked OG Weapon Switcher [Q])
     const milesLeft = Math.max(0, (sim.finishSample - p.sample) / 330).toFixed(1);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.56)';
-    ctx.fillRect(8, 8, 178, 24);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.66)';
+    ctx.fillRect(8, 8, 176, 24);
     this.drawSmallText(ctx, `LEFT: ${milesLeft} MI • GEAR ${p.gear}`, 14, 12, '#defff0');
 
-    let badgeX = 192;
-    if (p.weapon > 0) {
-      const wName = p.weapon === 1 ? 'CLUB' : 'CHAIN';
-      ctx.fillStyle = 'rgba(185, 62, 16, 0.85)';
-      ctx.fillRect(badgeX, 8, 56, 24);
-      this.drawSmallText(ctx, wName, badgeX + 7, 12, '#ffff60');
-      badgeX += 60;
-    }
-    if (p.nitroCharges > 0 || p.nitroTicks > 0) {
-      ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.90)' : 'rgba(15, 50, 100, 0.80)';
-      ctx.fillRect(516, 36, 116, 22);
+    const wDef = OG_WEAPONS[p.weapon] || OG_WEAPONS[0];
+    ctx.fillStyle = p.weapon === 3 ? 'rgba(28, 92, 200, 0.88)' : p.weapon > 0 ? 'rgba(185, 62, 16, 0.88)' : 'rgba(52, 56, 62, 0.85)';
+    ctx.fillRect(8, 36, 152, 22);
+    this.drawSmallText(ctx, `WPN [Q]: ${wDef.key}`, 14, 39, '#ffff60');
+
+    // 6. Top-right Police Mode Radar OR Cop Pursuit + Nitro Status
+    if (sim.isPoliceMode) {
+      const flash = Math.floor(sim.ticks / 7) % 2 === 0;
+      ctx.fillStyle = flash ? 'rgba(205, 22, 28, 0.88)' : 'rgba(20, 82, 215, 0.88)';
+      ctx.fillRect(viewW - 214, 8, 206, 24);
       this.drawSmallText(
         ctx,
-        p.nitroTicks > 0 ? `BOOST! (${p.nitroCharges})` : `NITRO [N]: ${p.nitroCharges}`,
-        523,
-        39,
-        p.nitroTicks > 0 ? '#ffffff' : '#99eeff'
+        `OUTLAWS LEFT: ${sim.outlawsRemaining} / ${sim.totalOutlaws}`,
+        viewW - 206,
+        12,
+        '#ffffff'
       );
-    }
 
-    // Police siren alert pill on top-right when cop is pursuing
-    if (sim.activeCop && sim.activeCop.chasing) {
-      const flash = Math.floor(sim.ticks / 6) % 2 === 0;
-      ctx.fillStyle = flash ? 'rgba(205, 22, 22, 0.86)' : 'rgba(22, 75, 215, 0.86)';
-      ctx.fillRect(508, 8, 124, 24);
-      this.drawSmallText(ctx, `COP: ${sim.activeCop.name.toUpperCase()}`, 516, 12, '#ffffff');
+      if (sim.leadOutlaw) {
+        const leadMiles = Math.max(0, (sim.finishSample - sim.leadOutlaw.sample) / 330);
+        const urgent = leadMiles < 0.85;
+        ctx.fillStyle = urgent && flash ? 'rgba(220, 20, 20, 0.92)' : 'rgba(10, 18, 32, 0.84)';
+        ctx.fillRect(viewW - 214, 35, 206, 22);
+        this.drawSmallText(
+          ctx,
+          `#1 ${sim.leadOutlaw.name.toUpperCase()}: ${leadMiles.toFixed(1)} MI LEFT`,
+          viewW - 206,
+          38,
+          urgent ? '#ffff55' : '#99eeff'
+        );
+      }
+
+      if (p.nitroCharges > 0 || p.nitroTicks > 0) {
+        ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.90)' : 'rgba(15, 50, 100, 0.82)';
+        ctx.fillRect(viewW - 128, 60, 120, 22);
+        this.drawSmallText(
+          ctx,
+          p.nitroTicks > 0 ? `BOOST! (${p.nitroCharges})` : `NITRO [N]: ${p.nitroCharges}`,
+          viewW - 121,
+          63,
+          p.nitroTicks > 0 ? '#ffffff' : '#99eeff'
+        );
+      }
+    } else {
+      if (p.nitroCharges > 0 || p.nitroTicks > 0) {
+        ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.90)' : 'rgba(15, 50, 100, 0.80)';
+        ctx.fillRect(viewW - 124, 36, 116, 22);
+        this.drawSmallText(
+          ctx,
+          p.nitroTicks > 0 ? `BOOST! (${p.nitroCharges})` : `NITRO [N]: ${p.nitroCharges}`,
+          viewW - 117,
+          39,
+          p.nitroTicks > 0 ? '#ffffff' : '#99eeff'
+        );
+      }
+
+      if (sim.activeCop && sim.activeCop.chasing) {
+        const flash = Math.floor(sim.ticks / 6) % 2 === 0;
+        ctx.fillStyle = flash ? 'rgba(205, 22, 22, 0.86)' : 'rgba(22, 75, 215, 0.86)';
+        ctx.fillRect(viewW - 132, 8, 124, 24);
+        this.drawSmallText(ctx, `COP: ${sim.activeCop.name.toUpperCase()}`, viewW - 124, 12, '#ffffff');
+      }
     }
 
     ctx.restore();
@@ -205,33 +281,67 @@ export class HudRenderer {
     ctx.fillText(text, x, y);
   }
 
-  drawRaceBanners(ctx, sim) {
+  drawRaceBanners(ctx, sim, viewW = 640) {
     if (sim.countdownTicks > 0) {
       const sec = Math.ceil(sim.countdownTicks / 60);
       const label = sec >= 1 ? String(sec) : 'GO!';
-      this.drawBadlocBox(ctx, label, 0, 120, 640, 80, 68, '#ff6432', 'center');
+      this.drawBadlocBox(ctx, label, 0, 120, viewW, 80, 68, '#ff6432', 'center');
+      if (sim.isPoliceMode) {
+        this.drawBadlocBox(
+          ctx,
+          'BUST ALL 14 RACERS BEFORE ANYONE WINS!',
+          0,
+          194,
+          viewW,
+          40,
+          24,
+          '#66e6ff',
+          'center'
+        );
+      }
     } else if (sim.goBannerTicks > 0) {
-      this.drawBadlocBox(ctx, 'RASH ON!', 0, 118, 640, 80, 56, '#ffff40', 'center');
+      this.drawBadlocBox(
+        ctx,
+        sim.isPoliceMode ? 'PURSUIT ON!' : 'RASH ON!',
+        0,
+        118,
+        viewW,
+        80,
+        56,
+        sim.isPoliceMode ? '#66e6ff' : '#ffff40',
+        'center'
+      );
     }
 
     if (sim.bannerText && sim.bannerTicks > 0) {
-      this.drawBadlocBox(ctx, sim.bannerText, 0, 66, 640, 50, 34, sim.bannerColor || '#ffff40', 'center');
+      this.drawBadlocBox(
+        ctx,
+        sim.bannerText,
+        0,
+        66,
+        viewW,
+        50,
+        32,
+        sim.bannerColor || '#ffff40',
+        'center'
+      );
     }
 
     if (sim.player.state === 'running') {
+      const bx = Math.floor((viewW - 350) * 0.5);
       ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-      ctx.fillRect(145, 38, 350, 26);
-      this.drawSmallText(ctx, 'SPRINTING BACK TO YOUR DOWNED BIKE!', 175, 44, '#ffff55');
+      ctx.fillRect(bx, 38, 350, 26);
+      this.drawSmallText(ctx, 'SPRINTING BACK TO YOUR DOWNED BIKE!', bx + 30, 44, '#ffff55');
     }
 
     if (sim.paused) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.66)';
-      ctx.fillRect(0, 0, 640, 480);
-      this.drawBadlocBox(ctx, 'RACE PAUSED', 0, 118, 640, 64, 52, '#ff6432', 'center');
+      const bx = Math.floor((viewW - 260) * 0.5);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
+      ctx.fillRect(0, 0, viewW, 480);
+      this.drawBadlocBox(ctx, 'RACE PAUSED', 0, 118, viewW, 64, 52, '#ff6432', 'center');
 
       const opts = ['Resume Race (ESC)', 'Restart Race (R)', 'Quit to Menu (Q)'];
       for (let i = 0; i < opts.length; i++) {
-        const bx = 190;
         const by = 205 + i * 44;
         ctx.fillStyle = i === sim.pauseFocus ? 'rgba(255, 100, 50, 0.35)' : 'rgba(20, 20, 20, 0.8)';
         ctx.fillRect(bx, by, 260, 34);

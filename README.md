@@ -1,34 +1,37 @@
 # Road Rash (1996 PC Web Edition) — Made By Soham
 
-A personal, non-profit browser recreation of the 1996 Windows PC / 3DO classic **Road Rash**, built with Three.js, HTML5 Canvas, and WebAudio — complete with the original 640×480 `.RRI` menus, `.CRS` California courses, digitized rider/cop/traffic/pedestrian sprites, `.WAV` sound effects, SoundFont Grunge rock music, client-side `localStorage` Big Game career saves, and authentic `ROADRASH.EXE` physics & combat.
+A personal, non-profit browser recreation of the 1996 Windows PC / 3DO classic **Road Rash**, built with Three.js, HTML5 Canvas, and WebAudio — complete with the original `.RRI` menus, `.CRS` California courses, digitized rider/cop/traffic/pedestrian sprites, `.WAV` sound effects, SoundFont Grunge rock music, client-side `localStorage` Big Game career saves, and authentic `ROADRASH.EXE` physics & combat.
 
 ## Features
 
-- **1996 640×480 Frontend & `$1,000,000` Unlocked Garage (`localStorage`):**
-  - Displays **"Made By Soham"** on the starting screens.
-  - Starts every rider with **`$1,000,000` cash** so **all 15 Rat, Sport, and Super bikes are unlocked** right away at **Olley's Skoot-A-Rama** in Big Game Mode and selectable via **`Tab`** (or the Restroom) in Thrash Mode.
-- **Nitro / Speed Boost on ALL 15 Bikes:**
-  - Every motorcycle (Rat, Sport, and Super) is equipped with rechargeable **Nitro Speed Boost** (`N`, `B`, `Ctrl`, or double-tap `Up`/`W`).
-- **All 5 Decoded `.CRS` California Courses:**
-  - *The City*, *Sierra Nevada*, *The Peninsula*, *Napa Valley*, and *Pacific Highway* with camera-space perspective projection, 3D buildings, hills, coastal cliffs, tunnels, horizon backdrops, rear-view mirror, and cockpit dashboards (`Rat`, `Sport`, `Super`).
-- **Authentic Grounded `ROADRASH.EXE` Combat & Road Mechanics (No Fake Jumps):**
-  - **Grounded Road Riding:** Bikes stay planted on hill crests with fixed camera height; riding upright over a downed motorcycle gives a realistic low tire bump without artificial sky launches.
-  - **Melee Combat & Timed Weapon Snatching (`Space` / `Z` / `C`):** Punches, clubs, and chains visibly stagger rivals and drain their stamina bar until knockout; timing an unarmed punch during an armed rival's windup snatches their club or chain.
-  - **Physical Boot-Kick Shoves (`X` / `Shift`):** Kicks apply real lateral momentum that shoves rival motorcycles (or pursuing cops) across lanes into oncoming traffic, buildings, cliffs, or roadside obstacles.
-  - **Grounded Pedestrians & `HIBOB` Rider Crashes:** Clipped jaywalkers scream and collapse onto the pavement (`ped.anims[3]`), and crashed riders tumble, slide across the asphalt, stand up, and sprint on foot back to their downed motorcycles.
+- **Start-Screen Display Ratio Controls & Full Responsiveness (`4:3 OG` vs `16:9 Widescreen`):**
+  - Displays **"Made By Soham"** on the starting screens along with interactive **`4:3 OG`**, **`16:9 Wide`**, **`Fullscreen`**, and **`Start Game`** buttons right on the landing page, Main Menu, and responsive bottom navigation bar.
+  - **`16:9 Widescreen` (`854×480`)** renders a genuinely wider Three.js 3D horizontal field-of-view while keeping all 1996 cockpit gauges and UI photography razor-sharp with zero stretching.
+- **`$1,000,000` Cash & All 15 Bikes Unlocked (`localStorage`):**
+  - Starts every rider with **`$1,000,000` cash** so **all 15 Rat, Sport, and Super bikes are unlocked** right away at **Olley's Skoot-A-Rama** in Big Game Mode and selectable via click or **`Tab`** on Track Select.
+- **All 4 OG Weapons Unlocked for Everyone:**
+  - Switch freely anytime pre-race or mid-race (`Q`, `E`, `1`–`4`, or clicking the HUD `WPN` badge / touch `WPN` button) between **Bare Fists** (with timed weapon-snatching), **Wooden Club**, **Steel Chain**, and **Police Nightstick**.
+- **Special Police Interceptor Mode + New Custom Map (*Interceptor Beltway*):**
+  - Ride as a **Highway Patrol Officer** (`LOCOP.DAT` Police Interceptor bike, officer animations, flashing red/blue strobes, and live siren) and **bust all 14 outlaw racers** before any single racer crosses the finish line!
+  - Includes a brand-new 6th custom course — **Interceptor Beltway** — spanning a 6-lane downtown metro freeway, twin enclosed echo tunnels, Pacific coastal cliff drop-offs, and Sierra mountain sweepers.
+- **Nitro / Speed Boost on ALL Bikes:**
+  - Every motorcycle (Rat, Sport, Super, and Police Interceptor) is equipped with rechargeable **Nitro Speed Boost** (`N`, `B`, `Ctrl`, or double-tap `Up`/`W`).
+- **Authentic Grounded `ROADRASH.EXE` Physics & Combat (No Fake Jumps):**
+  - Bikes stay planted on hill crests with fixed camera height; riding upright over a downed motorcycle gives a realistic low tire hop without artificial sky launches; crashed riders tumble, slide, stand up, and sprint back to their bikes; clipped jaywalkers collapse onto the pavement.
 
 ## Controls
 
 | Key | Action |
 | --- | --- |
 | `Arrow Keys` / `WASD` | Steer, Accelerate & Brake |
-| `Space` / `Enter` | Smart Melee Swing (Punch / Club / Chain toward closest rival) |
-| `Z` / `,` | Left Melee Swing |
-| `C` / `.` | Right Melee Swing |
+| `Space` / `Enter` | Smart Melee Swing (Fists / Club / Chain / Nightstick) |
+| `Z` / `,` and `C` / `.` | Left / Right Melee Swing |
+| `Q` / `E` / `1`–`4` | Cycle or Select Any Unlocked OG Weapon Mid-Race |
 | `X` / `Shift` / `/` | Lateral Boot Kick (Shove Rival Across Lanes) |
-| `N` / `B` / `Ctrl` / Double-Tap `Up` | Nitro Speed Boost (Enabled on ALL 15 Bikes!) |
-| `Tab` | Switch Any of the 15 Unlocked Bikes on Thrash Track Select |
+| `N` / `B` / `Ctrl` / Double-Tap `Up` | Nitro Speed Boost (Enabled on ALL Bikes!) |
+| `G` | Toggle Police Siren (in Police Mode) |
 | `F10` / `H` | Cycle Cockpit HUD (Full Dash / Mini / Off) |
+| `F11` | Toggle Fullscreen (`4:3 OG` or `16:9 Wide`) |
 | `M` | Next Grunge Rock Jukebox Track |
 | `Esc` / `P` | Pause / Menu |
 

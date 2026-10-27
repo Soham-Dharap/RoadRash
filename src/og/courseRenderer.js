@@ -98,6 +98,8 @@ export class CourseRenderer {
   constructor(glCanvas, assets) {
     this.glCanvas = glCanvas;
     this.assets = assets;
+    this.viewW = VIEW_W;
+    this.viewH = VIEW_H;
     if (this.glCanvas && this.glCanvas.style) {
       this.glCanvas.style.display = 'none';
     }
@@ -108,15 +110,15 @@ export class CourseRenderer {
       alpha: true,
       powerPreference: 'high-performance'
     });
-    this.renderer.setSize(VIEW_W, VIEW_H, false);
+    this.renderer.setSize(this.viewW, this.viewH, false);
     this.renderer.setPixelRatio(1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.setClearColor(0x000000, 0);
 
     this.scene = new THREE.Scene();
 
-    // Exact road.cpp projection: optical center at (320, 180) in 640x480, focal length = 512px!
-    this.camera = new THREE.PerspectiveCamera(45, VIEW_W / VIEW_H, 16, 22000);
+    // Exact road.cpp projection: optical center at (viewW/2, 180), focal length = 512px!
+    this.camera = new THREE.PerspectiveCamera(45, this.viewW / this.viewH, 16, 22000);
     this.camera.position.set(0, 0, 0);
     this.camera.rotation.set(0, 0, 0);
     this.applyExactRoadRashProjection(16, 22000);
@@ -136,13 +138,22 @@ export class CourseRenderer {
     this.lastCamEyeHeight = BASE_CAM_HEIGHT;
   }
 
+  setViewportWidth(width) {
+    const nextW = Math.max(640, Math.round(width || VIEW_W));
+    if (this.viewW === nextW) return;
+    this.viewW = nextW;
+    this.renderer.setSize(this.viewW, this.viewH, false);
+    this.camera.aspect = this.viewW / this.viewH;
+    this.applyExactRoadRashProjection(16, 22000);
+  }
+
   applyExactRoadRashProjection(near, far) {
     const m = this.camera.projectionMatrix.elements;
     m.fill(0);
-    m[0] = FOCAL_PX / (VIEW_W * 0.5); // 512 / 320 = 1.6
-    m[5] = FOCAL_PX / (VIEW_H * 0.5); // 512 / 240 = 2.1333333
+    m[0] = FOCAL_PX / (this.viewW * 0.5); // 512 / 320 in 4:3, 512 / 427 in 16:9 widescreen!
+    m[5] = FOCAL_PX / (this.viewH * 0.5); // 512 / 240 = 2.1333333
     m[8] = 0;
-    m[9] = -(1.0 - (HORIZON_Y / VIEW_H) * 2.0); // cy = 180 -> ndcY = +0.25 at Y=0 -> m[9] = -0.25
+    m[9] = -(1.0 - (HORIZON_Y / this.viewH) * 2.0); // cy = 180 -> ndcY = +0.25 at Y=0 -> m[9] = -0.25
     m[10] = -(far + near) / (far - near);
     m[11] = -1;
     m[14] = -(2 * far * near) / (far - near);
@@ -235,7 +246,7 @@ export class CourseRenderer {
       const relX = x - camLat;
       const relY = y - camEyeHeight;
       const scalePx = FOCAL_PX / depth;
-      const roadScreenX = VIEW_W * 0.5 + relX * scalePx;
+      const roadScreenX = this.viewW * 0.5 + relX * scalePx;
       const roadScreenY = HORIZON_Y - relY * scalePx;
 
       const clipCeilingY = minRoadScreenY;
@@ -306,7 +317,7 @@ export class CourseRenderer {
     return {
       depth,
       scalePx,
-      sx: VIEW_W * 0.5 + relX * scalePx,
+      sx: this.viewW * 0.5 + relX * scalePx,
       sy: HORIZON_Y - relY * scalePx,
       roadTangentYaw: Math.atan2(dx, SAMPLE_LEN),
       clipY
@@ -758,11 +769,11 @@ export class CourseRenderer {
 
     ctx2d.save();
     ctx2d.imageSmoothingEnabled = false;
-    ctx2d.clearRect(0, 0, VIEW_W, VIEW_H);
+    ctx2d.clearRect(0, 0, this.viewW, this.viewH);
 
     const inTunnel = slices[0]?.raw?.[10] === 1;
     this.drawHorizonAndClouds(ctx2d, sim.headingAccum, inTunnel);
-    ctx2d.drawImage(this.glCanvas, 0, 0, VIEW_W, VIEW_H);
+    ctx2d.drawImage(this.glCanvas, 0, 0, this.viewW, this.viewH);
 
     this.drawWorldSprites(ctx2d, sim);
     this.drawRearViewMirror(ctx2d, sim);
@@ -773,7 +784,7 @@ export class CourseRenderer {
   drawHorizonAndClouds(ctx2d, headingAccum, inTunnel) {
     if (inTunnel) {
       ctx2d.fillStyle = '#09090d';
-      ctx2d.fillRect(0, 0, VIEW_W, HORIZON_Y + 8);
+      ctx2d.fillRect(0, 0, this.viewW, HORIZON_Y + 8);
       return;
     }
 
@@ -783,7 +794,7 @@ export class CourseRenderer {
     if (hz) {
       const srcY = Math.max(0, hz.height - 188);
       const srcH = hz.height - srcY;
-      for (let x = -scrollX; x < VIEW_W; x += hz.width) {
+      for (let x = -scrollX; x < this.viewW; x += hz.width) {
         ctx2d.drawImage(hz, 0, srcY, hz.width, srcH, Math.floor(x), 0, hz.width, HORIZON_Y + 8);
       }
     } else {
@@ -791,14 +802,14 @@ export class CourseRenderer {
       g.addColorStop(0, '#3264b8');
       g.addColorStop(1, '#9dc4eb');
       ctx2d.fillStyle = g;
-      ctx2d.fillRect(0, 0, VIEW_W, HORIZON_Y + 8);
+      ctx2d.fillRect(0, 0, this.viewW, HORIZON_Y + 8);
     }
 
     const cloud = this.assets.bigCloud;
     if (cloud) {
       const cScroll = (((headingAccum * 0.16 + performance.now() * 0.006) % cloud.width) + cloud.width) % cloud.width;
       ctx2d.globalAlpha = 0.62;
-      for (let x = -cScroll; x < VIEW_W; x += cloud.width) {
+      for (let x = -cScroll; x < this.viewW; x += cloud.width) {
         ctx2d.drawImage(cloud, Math.floor(x), 0, cloud.width, Math.min(106, cloud.height));
       }
       ctx2d.globalAlpha = 1.0;
@@ -823,7 +834,7 @@ export class CourseRenderer {
         const [rIdx, lat, texId, rawSize, mirror, , hx, hy, w, h] = objs[j];
         const groundY = lat < 0 ? hL : hR;
         const proj = this.projectWorldPoint(rIdx, lat, groundY);
-        if (!proj || proj.sx < -260 || proj.sx > VIEW_W + 260) continue;
+        if (!proj || proj.sx < -260 || proj.sx > this.viewW + 260) continue;
 
         const sizeMul = rawSize > 0 ? rawSize * 0.25 : 1.75;
         const pxScale = sizeMul * proj.scalePx;
@@ -850,7 +861,7 @@ export class CourseRenderer {
     for (const car of sim.traffic) {
       if (!car.active) continue;
       const proj = this.projectWorldPoint(car.sample, car.lat, 0);
-      if (!proj || proj.sx < -260 || proj.sx > VIEW_W + 260) continue;
+      if (!proj || proj.sx < -260 || proj.sx > this.viewW + 260) continue;
       drawList.push({
         depth: proj.depth,
         draw: () => this.drawCarSprite(ctx2d, car, proj)
@@ -861,7 +872,7 @@ export class CourseRenderer {
     for (const ped of sim.pedestrians) {
       if (!ped.active) continue;
       const proj = this.projectWorldPoint(ped.sample, ped.lat, ped.airY || 0);
-      if (!proj || proj.sx < -160 || proj.sx > VIEW_W + 160) continue;
+      if (!proj || proj.sx < -160 || proj.sx > this.viewW + 160) continue;
       drawList.push({
         depth: proj.depth,
         draw: () => this.drawPedestrianSprite(ctx2d, ped, proj)
@@ -872,7 +883,7 @@ export class CourseRenderer {
     for (const db of sim.downedBikes) {
       if (!db.active) continue;
       const proj = this.projectWorldPoint(db.sample, db.lat, 0);
-      if (!proj || proj.sx < -180 || proj.sx > VIEW_W + 180) continue;
+      if (!proj || proj.sx < -180 || proj.sx > this.viewW + 180) continue;
       drawList.push({
         depth: proj.depth,
         draw: () => this.drawDownedBikeSprite(ctx2d, db, proj)
@@ -883,17 +894,18 @@ export class CourseRenderer {
     for (const cop of sim.cops) {
       if (!cop.active) continue;
       const proj = this.projectWorldPoint(cop.sample, cop.lat, cop.airY || 0);
-      if (!proj || proj.sx < -180 || proj.sx > VIEW_W + 180) continue;
+      if (!proj || proj.sx < -180 || proj.sx > this.viewW + 180) continue;
       drawList.push({
         depth: proj.depth,
         draw: () => this.drawCopSprite(ctx2d, cop, proj)
       });
     }
 
-    // 6. All 15 Riders (14 AI Rivals + Player)
+    // 6. All 15 Riders (14 Outlaw/AI Rivals + Player / Police Interceptor)
     for (const r of sim.riders) {
+      if (r.state === 'busted' && !r.isPlayer) continue;
       const proj = this.projectWorldPoint(r.sample, r.lat, r.airY || 0);
-      if (!proj || proj.sx < -220 || proj.sx > VIEW_W + 220) continue;
+      if (!proj || proj.sx < -220 || proj.sx > this.viewW + 220) continue;
       const clipY = r.isPlayer ? 416 : Math.min(406, proj.clipY + 4);
       drawList.push({
         depth: proj.depth - (r.isPlayer ? 2 : 0),
@@ -930,7 +942,9 @@ export class CourseRenderer {
   }
 
   drawCarSprite(ctx2d, car, proj) {
-    const cList = this.assets.carsMeta?.courses?.[this.course.name];
+    const courseKey = this.course.carPool || this.course.name;
+    const cList =
+      this.assets.carsMeta?.courses?.[courseKey] || this.assets.carsMeta?.courses?.CITY;
     if (!cList || !cList.length) return;
     const cDesc = cList[car.kind % cList.length];
 
@@ -938,7 +952,7 @@ export class CourseRenderer {
     const mip0Group = cDesc.views[2] || cDesc.views[0];
     if (!mip0Group || !mip0Group.length) return;
 
-    const relXNorm = Math.max(-1, Math.min(1, (proj.sx - VIEW_W * 0.5) / 290));
+    const relXNorm = Math.max(-1, Math.min(1, (proj.sx - this.viewW * 0.5) / 290));
     let subIdx = 0;
 
     if (mip0Group.length >= 16) {
@@ -1041,53 +1055,100 @@ export class CourseRenderer {
     this.drawClippedCanvas(ctx2d, img, dx, dy, dw, dh, mirror, clipY);
   }
 
-  drawCopSprite(ctx2d, cop, proj) {
+  drawCopSprite(ctx2d, cop, proj, clipYOverride = null) {
     const bm = this.assets.bikersMeta;
     if (!bm) return;
 
-    let frameIdx = 0;
+    let frameIdx = 3; // copView[1] center upright frame is 3!
     let mirror = false;
-    const animSeq = bm.copAnims?.[cop.animId];
+    const useAnimId = cop.animId && bm.copAnims?.[cop.animId] ? cop.animId : 2;
+    const animSeq = bm.copAnims?.[useAnimId];
     if (animSeq && animSeq.length) {
       const step = animSeq[cop.animStep % animSeq.length];
-      const relYaw = Math.max(-1, Math.min(1, (VIEW_W * 0.5 - proj.sx) / 280));
-      const sel = this.selectActorView(step.r, bm.copViews, cop.lean, relYaw, 0);
+      const relYaw = cop.isPlayer
+        ? Math.max(-0.35, Math.min(0.35, cop.lean * 0.22))
+        : Math.max(-1, Math.min(1, (this.viewW * 0.5 - proj.sx) / 280));
+      const sel = this.selectActorView(step.r, bm.copViews, cop.lean, relYaw, cop.runCompass || 0);
       frameIdx = sel.frameIdx;
       mirror = (sel.flags & 1) !== 0;
     } else {
       const absLean = Math.abs(cop.lean);
-      frameIdx = absLean > 0.55 ? 2 : absLean > 0.22 ? 1 : 0;
-      mirror = cop.lean < -0.12;
+      frameIdx = absLean > 0.62 ? 0 : absLean > 0.36 ? 1 : absLean > 0.14 ? 2 : 3;
+      mirror = cop.lean < -0.14;
+    }
+    if (cop.forceMirror !== null && cop.forceMirror !== undefined) {
+      mirror = cop.forceMirror;
     }
 
-    const img = this.assets.getCopCanvas(frameIdx) || this.assets.getCopCanvas(0);
-    const meta = bm.copFrames[frameIdx] || bm.copFrames[0];
+    const img = this.assets.getCopCanvas(frameIdx) || this.assets.getCopCanvas(3);
+    const meta = bm.copFrames[frameIdx] || bm.copFrames[3];
     if (!img || !meta) return;
 
-    const copScale = 1.48 * proj.scalePx;
+    const copScale = (cop.isPlayer ? 1.66 : 1.54) * proj.scalePx;
     const dw = meta[2] * copScale;
     const dh = meta[3] * copScale;
     const dx = proj.sx - dw * 0.5;
-    const dy = proj.sy - dh * 0.95;
-    const clipY = Math.min(404, proj.clipY + 4);
+    const dy = proj.sy - dh * (cop.state === 'crashing' ? 0.88 : 0.95);
+    const clipY = clipYOverride ?? Math.min(404, proj.clipY + 4);
 
     const shImg = this.assets.getCopShadowCanvas(frameIdx);
-    if (shImg && cop.airY < 5 && proj.sy < clipY) {
-      ctx2d.drawImage(shImg, proj.sx - dw * 0.55, proj.sy - dh * 0.16, dw * 1.1, dh * 0.25);
+    if (shImg && (cop.airY || 0) < 5 && proj.sy < clipY) {
+      this.drawClippedCanvas(
+        ctx2d,
+        shImg,
+        proj.sx - dw * 0.55,
+        proj.sy - dh * 0.16,
+        dw * 1.1,
+        dh * 0.25,
+        mirror,
+        clipY
+      );
     }
 
     this.drawClippedCanvas(ctx2d, img, dx, dy, dw, dh, mirror, clipY);
 
-    if (cop.chasing && dy < clipY) {
-      const flashRed = (Math.floor(performance.now() / 110) & 1) === 0;
-      ctx2d.fillStyle = flashRed ? 'rgba(255, 36, 36, 0.92)' : 'rgba(48, 136, 255, 0.92)';
+    if ((cop.chasing || cop.sirenOn) && cop.state !== 'crashing' && dy < clipY) {
+      const flashRed = (Math.floor(performance.now() / 100) & 1) === 0;
+      const rPx = Math.max(2.6, 5.2 * proj.scalePx);
+      ctx2d.fillStyle = flashRed ? 'rgba(255, 36, 36, 0.94)' : 'rgba(38, 138, 255, 0.94)';
       ctx2d.beginPath();
-      ctx2d.arc(proj.sx, dy + dh * 0.26, Math.max(2.5, 4.8 * proj.scalePx), 0, Math.PI * 2);
+      ctx2d.arc(proj.sx - dw * 0.16, dy + dh * 0.30, rPx, 0, Math.PI * 2);
+      ctx2d.fill();
+      ctx2d.fillStyle = flashRed ? 'rgba(38, 138, 255, 0.94)' : 'rgba(255, 36, 36, 0.94)';
+      ctx2d.beginPath();
+      ctx2d.arc(proj.sx + dw * 0.16, dy + dh * 0.30, rPx, 0, Math.PI * 2);
+      ctx2d.fill();
+    }
+
+    if (cop.hitSparkTimer > 0 && dy < clipY) {
+      ctx2d.save();
+      const spX = proj.sx + (cop.lastHitSide || 1) * dw * 0.34;
+      const spY = dy + dh * 0.36;
+      const rad = Math.max(4, 14 * proj.scalePx);
+      ctx2d.fillStyle = '#ffff55';
+      for (let k = 0; k < 6; k++) {
+        const ang = (k / 6) * Math.PI * 2 + cop.hitSparkTimer * 0.6;
+        ctx2d.fillRect(spX + Math.cos(ang) * rad - 2, spY + Math.sin(ang) * rad - 2, 4, 4);
+      }
+      ctx2d.restore();
+    }
+
+    if (cop.nitroTicks > 0 && cop.state === 'riding' && dy < clipY) {
+      const flameH = (13 + ((cop.nitroTicks * 7) % 10)) * proj.scalePx;
+      const flameW = Math.max(4, 9 * proj.scalePx);
+      ctx2d.fillStyle = cop.nitroTicks & 1 ? '#38b6ff' : '#ffee44';
+      ctx2d.beginPath();
+      ctx2d.ellipse(proj.sx, proj.sy - dh * 0.14, flameW, flameH, 0, 0, Math.PI * 2);
       ctx2d.fill();
     }
   }
 
   drawRiderSprite(ctx2d, r, proj, clipY) {
+    if (r.isPolice && r.state !== 'running') {
+      this.drawCopSprite(ctx2d, r, proj, clipY);
+      return;
+    }
+
     const bm = this.assets.bikersMeta;
     if (!bm) return;
 
@@ -1097,7 +1158,7 @@ export class CourseRenderer {
 
     const relYaw = r.isPlayer
       ? Math.max(-0.35, Math.min(0.35, r.lean * 0.22))
-      : Math.max(-1, Math.min(1, (VIEW_W * 0.5 - proj.sx) / 260));
+      : Math.max(-1, Math.min(1, (this.viewW * 0.5 - proj.sx) / 260));
 
     const sel = this.selectActorView(step.r, bm.riderViews, r.lean, relYaw, r.runCompass || 0);
     let frameIdx = sel.frameIdx;
@@ -1191,10 +1252,10 @@ export class CourseRenderer {
 
     if (!closestBehind) return;
 
-    const mx = 250;
-    const my = 6;
     const mw = 140;
     const mh = 42;
+    const mx = Math.floor((this.viewW - mw) * 0.5);
+    const my = 6;
 
     ctx2d.save();
     ctx2d.fillStyle = '#182438';
@@ -1214,7 +1275,7 @@ export class CourseRenderer {
       ctx2d.beginPath();
       ctx2d.arc(bx, my + mh * 0.64 - 8 * scale, 5 * scale + 2, 0, Math.PI * 2);
       ctx2d.fill();
-      const copImg = this.assets.getCopCanvas(0);
+      const copImg = this.assets.getCopCanvas(3) || this.assets.getCopCanvas(0);
       if (copImg) {
         const dw = Math.max(8, 22 * scale);
         const dh = Math.max(12, 30 * scale);
