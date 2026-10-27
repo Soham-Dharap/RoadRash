@@ -337,6 +337,7 @@ export class AudioEngine {
 
   async playMusicTrack(trackNameOrIndex) {
     if (!this.ensureContext()) return;
+    const reqId = (this.musicReqId = (this.musicReqId || 0) + 1);
     const name =
       typeof trackNameOrIndex === 'number'
         ? MUSIC_TRACKS[((trackNameOrIndex % MUSIC_TRACKS.length) + MUSIC_TRACKS.length) % MUSIC_TRACKS.length]
@@ -344,13 +345,14 @@ export class AudioEngine {
     this.currentTrackIndex = Math.max(0, MUSIC_TRACKS.indexOf(name));
 
     const ok = await this.initMusicBank();
-    if (!ok) return;
+    if (!ok || reqId !== this.musicReqId) return;
 
     let song = this.songCache.get(name);
     if (!song) {
       song = await fetch(`/og/music/${name}.json`).then((r) => r.json());
       this.songCache.set(name, song);
     }
+    if (reqId !== this.musicReqId) return;
 
     this.stopMusicVoices();
     this.currentSong = song;

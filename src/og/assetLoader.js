@@ -143,6 +143,25 @@ export class AssetManager {
     bmCtx.drawImage(bigMeter, 0, 0);
     this.bigMeterOpaque = bmCanvas;
 
+    // Create a chroma-keyed Nitro bulb sheet where pure blue (0, 0, 255) & black (0, 0, 0) surround pixels are transparent!
+    const nitroCanvas = document.createElement('canvas');
+    nitroCanvas.width = bigMeter.width;
+    nitroCanvas.height = bigMeter.height;
+    const nitroCtx = nitroCanvas.getContext('2d');
+    nitroCtx.drawImage(bigMeter, 0, 0);
+    const nitroData = nitroCtx.getImageData(0, 0, nitroCanvas.width, nitroCanvas.height);
+    const npx = nitroData.data;
+    for (let i = 0; i < npx.length; i += 4) {
+      if (
+        (npx[i] === 0 && npx[i + 1] === 0 && npx[i + 2] === 255) ||
+        (npx[i] === 0 && npx[i + 1] === 0 && npx[i + 2] === 0)
+      ) {
+        npx[i + 3] = 0;
+      }
+    }
+    nitroCtx.putImageData(nitroData, 0, 0);
+    this.bigMeterNitro = nitroCanvas;
+
     onProgress(0.78, 'Decoding 1996 world & pedestrian textures...');
     this.worldIndexed = await decodeIndexedBytes('/og/sprites/world_indexed.png');
 
@@ -341,15 +360,27 @@ export class AssetManager {
     if (this.carCanvasCache.has(rectIdx)) return this.carCanvasCache.get(rectIdx);
     const rects = this.carsMeta?.rects;
     if (!rects || rectIdx < 0 || rectIdx >= rects.length) return null;
-    const [sx, sy, w, h] = rects[rectIdx];
-    if (w <= 0 || h <= 0) return null;
+    const entry = rects[rectIdx];
+    const [rx, ry, rw, rh, keyed, , b0, b1, b2, b3] = entry;
+    if (rw <= 0 || rh <= 0) return null;
+
+    let ox = 0;
+    let oy = 0;
+    let w = rw;
+    let h = rh;
+    if (keyed && b2 !== undefined && b3 !== undefined && b2 >= b0 && b3 >= b1) {
+      ox = Math.max(0, Math.min(rw - 1, b0));
+      oy = Math.max(0, Math.min(rh - 1, b1));
+      w = Math.max(1, Math.min(rw - ox, b2 - b0 + 1));
+      h = Math.max(1, Math.min(rh - oy, b3 - b1 + 1));
+    }
 
     const c = document.createElement('canvas');
     c.width = w;
     c.height = h;
     const ctx = c.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.carsAtlas, sx, sy, w, h, 0, 0, w, h);
+    ctx.drawImage(this.carsAtlas, rx + ox, ry + oy, w, h, 0, 0, w, h);
     this.carCanvasCache.set(rectIdx, c);
     return c;
   }
@@ -359,8 +390,22 @@ export class AssetManager {
     if (this.worldCanvasCache.has(texId)) return this.worldCanvasCache.get(texId);
     const rects = this.worldMeta?.rects;
     if (!rects || texId >= rects.length) return null;
-    const [sx, sy, w, h, keyed] = rects[texId];
-    if (w <= 0 || h <= 0) return null;
+    const entry = rects[texId];
+    const [rx, ry, rw, rh, keyed, , b0, b1, b2, b3] = entry;
+    if (rw <= 0 || rh <= 0) return null;
+
+    let ox = 0;
+    let oy = 0;
+    let w = rw;
+    let h = rh;
+    // Keyed 2D world sprites (trees, lampposts, signs, billboards, pedestrians) crop to exact CelTexture.bounds;
+    // opaque 3D tiling textures keep power-of-two dimensions for RepeatWrapping.
+    if (keyed && b2 !== undefined && b3 !== undefined && b2 >= b0 && b3 >= b1) {
+      ox = Math.max(0, Math.min(rw - 1, b0));
+      oy = Math.max(0, Math.min(rh - 1, b1));
+      w = Math.max(1, Math.min(rw - ox, b2 - b0 + 1));
+      h = Math.max(1, Math.min(rh - oy, b3 - b1 + 1));
+    }
 
     const c = document.createElement('canvas');
     c.width = w;
@@ -371,6 +416,8 @@ export class AssetManager {
     const pal = this.bikersMeta.palette;
     const sheetW = this.worldIndexed.width;
     const src = this.worldIndexed.indices;
+    const sx = rx + ox;
+    const sy = ry + oy;
 
     for (let y = 0; y < h; y++) {
       let srcOff = (sy + y) * sheetW + sx;

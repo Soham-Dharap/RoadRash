@@ -115,9 +115,10 @@ async function startRace(raceConfig) {
   clearInputs();
 
   try {
+    const dashBikeId = raceConfig.mode === 'copchase' ? 9 : raceConfig.bikeId;
     const [{ course, horizon }, dashImg] = await Promise.all([
       assets.loadCourse(raceConfig.courseKey),
-      assets.loadDash(raceConfig.bikeId, false)
+      assets.loadDash(dashBikeId, false)
     ]);
     activeDashImg = dashImg;
     courseRenderer.buildCourse(course, horizon, raceConfig.level);

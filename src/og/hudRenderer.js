@@ -44,28 +44,10 @@ export class HudRenderer {
     }
 
     const bm = this.assets.bigMeterOpaque || this.assets.bigMeter;
+    const bmNitro = this.assets.bigMeterNitro || this.assets.bigMeter;
     const opp = sim.nearestRival;
 
-    // Widescreen side-fairing extensions so 16:9 cockpit spans edge-to-edge cleanly
-    if (dashX > 0 && dashImg) {
-      const wingTop = 480 - Math.min(82, dashImg.height - 28);
-      const grad = ctx.createLinearGradient(0, wingTop, 0, 480);
-      grad.addColorStop(0, 'rgba(18, 20, 24, 0.92)');
-      grad.addColorStop(1, '#07080a');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, wingTop, dashX + 4, 480 - wingTop);
-      ctx.fillRect(dashX + 636, wingTop, dashX + 8, 480 - wingTop);
-      ctx.strokeStyle = '#2d323a';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, wingTop);
-      ctx.lineTo(dashX + 4, wingTop);
-      ctx.moveTo(dashX + 636, wingTop);
-      ctx.lineTo(viewW, wingTop);
-      ctx.stroke();
-    }
-
-    // 1. Draw the 3 meters BEHIND the dashboard cutouts (hud.cpp lines 284-305)
+    // 1. Draw the 3 meters BEHIND the dashboard cutouts (hud.cpp:284-332, exact layout_ offsets 40, 45, 50)
     if (bm) {
       const stamVal = Math.max(0, Math.min(31, Math.round((p.stamina / p.maxStamina) * 31)));
       const condVal = Math.max(0, Math.min(31, Math.round((p.bikeCond / p.maxBikeCond) * 31)));
@@ -92,52 +74,74 @@ export class HudRenderer {
       }
     }
 
-    // 2. Blit authentic 640x119/122 dashboard PNG over the meter cutouts
+    // 2. Blit authentic 640x119/121 dashboard PNG over the meter cutouts
+    // (In 16:9 widescreen, outer road wings stay open & unobstructed per race_caches.hpp!)
     if (dashImg) {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(dashImg, dashX, 480 - dashImg.height);
     }
 
-    // 3. Elliptical perspective gauge needles (Speedo @ 250,449; 6-Speed Tach @ 388,441)
-    const speedFrac = Math.max(0, Math.min(1.08, speedMph / 185));
-    const speedAngle = -2.28 + speedFrac * 4.56;
+    // 2b. Authentic 10-bulb Nitro LED Strip inside Superbike / Police Interceptor recessed bay
+    // (bigmeter.png bulbs at x=62..172, y=44..64 with pure-blue (0,0,255) surround keyed out!)
+    const isSuperDash = sim.isPoliceMode || p.stats?.cls === 'super';
+    if (bmNitro && isSuperDash) {
+      const maxBulbs = 10;
+      const litBulbs = Math.max(
+        0,
+        Math.min(
+          maxBulbs,
+          Math.round((p.nitroCharges / Math.max(1, p.maxNitroCharges || 10)) * maxBulbs)
+        )
+      );
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(bmNitro, 62, 54, 110, 10, dashX + 271, 369, 110, 10);
+      const showLit = p.nitroTicks > 0 ? ((sim.ticks >> 2) & 1 ? maxBulbs : litBulbs) : litBulbs;
+      if (showLit > 0) {
+        ctx.drawImage(bmNitro, 62, 44, showLit * 11, 10, dashX + 271, 369, showLit * 11, 10);
+      }
+    }
+
+    // 3. Exact hud.cpp elliptical perspective gauge needles:
+    // 0 MPH / 0 RPM = -90 deg (-PI/2), 100 MPH / 6k RPM = 0 deg (12 o'clock), 200 MPH / 12k RPM = +90 deg (+PI/2)
+    const speedFrac = Math.max(0, Math.min(1.06, speedMph / 200));
+    const speedAngle = -Math.PI * 0.5 + speedFrac * Math.PI;
     this.drawNeedle(ctx, dashX + 250, 449, 44, 28, speedAngle);
 
-    const rpmFrac = Math.max(0.05, Math.min(1.05, p.rpmNorm));
-    const rpmAngle = -2.28 + rpmFrac * 4.48;
+    const rpmFrac = Math.max(0.05, Math.min(1.04, p.rpmNorm));
+    const rpmAngle = -Math.PI * 0.5 + rpmFrac * Math.PI;
     this.drawNeedle(ctx, dashX + 388, 441, 28, 20, rpmAngle);
 
-    // 4. Authentic Badloc LCD & name readouts matching hudLayout
+    // 4. Authentic Badloc LCD & name readouts matching ROADRASH.EXE hudLayout
     const displayName = sim.isPoliceMode ? `OFC ${sim.config.playerName}` : sim.config.playerName;
     this.drawBadlocBox(
       ctx,
       displayName,
       dashX + 4,
-      447,
-      164,
+      446,
+      132,
       30,
-      22,
+      20,
       sim.isPoliceMode ? '#66e6ff' : '#ffff00',
       'right'
     );
     const centerLcd = sim.isPoliceMode ? String(sim.outlawsRemaining) : String(sim.playerPlace);
-    this.drawBadlocBox(ctx, centerLcd, dashX + 16, 399, 624, 30, 25, '#ffffff', 'center');
+    this.drawBadlocBox(ctx, centerLcd, dashX + 307, 403, 39, 24, 24, '#ffffff', 'center');
 
     // Odometer Distance (tenths of a mile: 33 samples = 0.1 mi, matching hud.cpp!)
     const tenths = Math.max(0, Math.floor((p.sample - sim.startSample) / 33));
     const distStr = `${String(Math.floor(tenths / 10)).padStart(2, '0')}.${tenths % 10}`;
-    this.drawBadlocBox(ctx, distStr, dashX, 452, 345, 28, 22, '#ffffff', 'right');
+    this.drawBadlocBox(ctx, distStr, dashX + 292, 452, 54, 24, 22, '#ffffff', 'center');
 
     // Nearest / Focused Opponent Name + Gap + Up/Down Arrow
     if (opp) {
-      this.drawBadlocBox(ctx, opp.name, dashX + 472, 447, 164, 30, 24, '#ffffff', 'left');
+      this.drawBadlocBox(ctx, opp.name, dashX + 498, 446, 138, 30, 21, '#ffffff', 'left');
       const dSamples = opp.sample - p.sample;
       const ahead = dSamples >= 0;
       const gapMiles = Math.min(9.999, Math.abs(dSamples) / 330);
       const gapStr = gapMiles.toFixed(3);
       const gapColor = ahead ? '#e71000' : '#28a31c';
       this.drawBadlocBox(ctx, gapStr, dashX + 436, 394, 196, 28, 22, gapColor, 'left');
-      this.drawGapArrow(ctx, dashX + 420, ahead ? 401 : 403, ahead);
+      this.drawGapArrow(ctx, dashX + 422, ahead ? 401 : 403, ahead);
     }
 
     // 5. Top-left status badges (Miles Left, Gear, Unlocked OG Weapon Switcher [Q])
@@ -262,13 +266,14 @@ export class HudRenderer {
 
   drawBadlocBox(ctx, text, x, y, w, h, pxSize, color, align = 'left') {
     ctx.font = `${pxSize}px RRBadloc, sans-serif`;
-    ctx.textBaseline = 'top';
+    ctx.textBaseline = 'middle';
     ctx.textAlign = align;
     const tx = align === 'center' ? x + w * 0.5 : align === 'right' ? x + w : x;
+    const ty = y + h * 0.5;
     ctx.fillStyle = '#000000';
-    ctx.fillText(text, tx + 2, y + 2);
+    ctx.fillText(text, tx + 2, ty + 2);
     ctx.fillStyle = color;
-    ctx.fillText(text, tx, y);
+    ctx.fillText(text, tx, ty);
   }
 
   drawSmallText(ctx, text, x, y, color) {

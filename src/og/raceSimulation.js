@@ -142,9 +142,10 @@ export class RaceSimulation {
 
   initRiders() {
     const pStats = this.bikeStats(this.config.bikeId, true);
+    const requestedWeapon = this.config.weaponId ?? this.config.startWeapon;
     const defaultWeapon =
-      this.config.startWeapon !== undefined
-        ? this.config.startWeapon
+      requestedWeapon !== undefined
+        ? requestedWeapon
         : this.isPoliceMode
           ? 3
           : 2;
@@ -258,7 +259,23 @@ export class RaceSimulation {
     const courseKey = this.course.carPool || this.course.name;
     const courseCars =
       this.assets.carsMeta?.courses?.[courseKey] || this.assets.carsMeta?.courses?.CITY || [];
-    const numKinds = Math.max(1, courseCars.length);
+
+    // Separate DATA/CARS/*.CAR vehicle classes:
+    // *G (views=9) = Going same-direction rear taillights,
+    // *C (views>=16) = Coming oncoming front headlights,
+    // *S (views=2) = Sideways cross-intersection vehicles!
+    const goingKinds = [];
+    const comingKinds = [];
+    const crossKinds = [];
+    courseCars.forEach((c, idx) => {
+      const vLen = c.views?.[0]?.length || 0;
+      if (vLen >= 16) comingKinds.push(idx);
+      else if (vLen >= 9) goingKinds.push(idx);
+      else if (vLen >= 2) crossKinds.push(idx);
+    });
+    const safeGoing = goingKinds.length ? goingKinds : [0];
+    const safeComing = comingKinds.length ? comingKinds : safeGoing;
+
     const totalSpan = this.finishSample - (this.startSample + 22);
     const count = Math.min(36, Math.max(18, Math.floor(totalSpan / 45)));
 
@@ -266,17 +283,52 @@ export class RaceSimulation {
       const s = this.startSample + 24 + (i + 0.5) * (totalSpan / count);
       const smp = this.sampleInfoAt(s);
       const oncoming = i % 2 === 0;
-      const laneMag = Math.max(115, (oncoming ? smp.left : smp.right) * 0.52);
+      const halfRoad = oncoming ? smp.left : smp.right;
+      const laneFrac = halfRoad >= 420 ? (i % 4 < 2 ? 0.34 : 0.72) : 0.52;
+      const laneMag = Math.max(112, halfRoad * laneFrac);
+      const kind = oncoming
+        ? safeComing[Math.floor(i / 2) % safeComing.length]
+        : safeGoing[Math.floor(i / 2) % safeGoing.length];
+
       this.traffic.push({
         id: i,
         active: true,
-        kind: i % numKinds,
+        kind,
         sample: s,
         dir: oncoming ? -1 : 1,
+        crossDir: 0,
+        laneFrac,
         mph: oncoming ? 44 + (i % 18) : 48 + (i % 20),
         lat: oncoming ? -laneMag : laneMag,
         hornCooldown: 0
       });
+    }
+
+    // Spawn authentic cross-intersection vehicles (*S) at marked side-street crosswalks (flags & 8)
+    if (crossKinds.length) {
+      let lastCrossS = this.startSample + 50;
+      let crossAdded = 0;
+      for (let s = this.startSample + 70; s < this.finishSample - 35 && crossAdded < 8; s++) {
+        const raw = this.course.samples[s];
+        if (!raw || (raw[9] & 8) === 0 || raw[10] === 1) continue;
+        if (s - lastCrossS < 190) continue;
+        lastCrossS = s;
+        const smp = this.sampleInfoAt(s);
+        const crossDir = crossAdded % 2 === 0 ? 1 : -1;
+        this.traffic.push({
+          id: count + crossAdded,
+          active: true,
+          kind: crossKinds[crossAdded % crossKinds.length],
+          sample: s + 0.5,
+          dir: 0,
+          crossDir,
+          laneFrac: 0.5,
+          mph: 36,
+          lat: crossDir > 0 ? -(smp.left * 0.65) : smp.right * 0.65,
+          hornCooldown: 0
+        });
+        crossAdded++;
+      }
     }
   }
 
@@ -347,6 +399,7 @@ export class RaceSimulation {
         name: COP_NAMES[i % COP_NAMES.length].trim(),
         active: false,
         chasing: false,
+        state: 'riding',
         spawnSample: spawnS,
         sample: spawnS,
         lat: 195,
@@ -358,6 +411,10 @@ export class RaceSimulation {
         animId: 2,
         animStep: 0,
         animTick: 0,
+        swingTicks: 0,
+        crashTimer: 0,
+        hitSparkTimer: 0,
+        lastHitSide: 1,
         attackCooldown: 45
       });
     }
@@ -982,17 +1039,23 @@ export class RaceSimulation {
 
     // 2. Check Motorcycle Police Officer!
     for (const cop of this.cops) {
-      if (!cop.active) continue;
+      if (!cop.active || cop.state === 'crashing') continue;
       const ds = Math.abs(cop.sample - attacker.sample);
       const relLat = cop.lat - attacker.lat;
       if (ds <= 1.7 && Math.abs(relLat) <= reachLat && Math.sign(relLat || attacker.attackSide) === attacker.attackSide) {
         const dmg = attacker.attackType === 'weapon' && attacker.weapon > 0 ? 38 : 22;
         cop.stamina -= dmg;
         cop.latVel += attacker.attackSide * (attacker.attackType === 'kick' ? 19.0 : 6.0);
+        cop.hitSparkTimer = 10;
+        cop.lastHitSide = -attacker.attackSide;
         this.audio.playSfx(attacker.attackType === 'kick' ? 'kick_mw4' : 'clubimpa', { volume: 0.9 });
         if (cop.stamina <= 0) {
-          cop.active = false;
+          cop.state = 'crashing';
           cop.chasing = false;
+          cop.animId = 28;
+          cop.animStep = 0;
+          cop.crashTimer = 84;
+          cop.mph = Math.max(24, cop.mph * 0.68);
           this.audio.playSfx('crashhar', { volume: 0.9 });
           if (attacker.isPlayer) this.showBanner(`WRECKED OFFICER ${cop.name.toUpperCase()}!`, '#66ff66', 90);
         }
@@ -1004,13 +1067,19 @@ export class RaceSimulation {
   // ==================== TRAFFIC, PEDESTRIANS, FALLEN RIDERS & DOWNED-BIKE RAMPS ====================
 
   checkWorldHazards(r) {
-    // 1. Traffic Cars / Trucks / Taxis
+    // 1. Traffic Cars / Trucks / Taxis & Cross-Intersection Cars
     for (const car of this.traffic) {
       if (!car.active) continue;
       const ds = Math.abs(car.sample - r.sample);
       const dLat = Math.abs(car.lat - r.lat);
-      if (ds < 1.18 && dLat < 94 && r.airY < 32) {
-        const closingMph = car.dir < 0 ? r.speedMph + car.mph : Math.abs(r.speedMph - car.mph);
+      const hitLat = car.crossDir ? 132 : 94;
+      const hitDs = car.crossDir ? 1.05 : 1.18;
+      if (ds < hitDs && dLat < hitLat && r.airY < 32) {
+        const closingMph = car.crossDir
+          ? Math.max(40, r.speedMph * 0.9 + 25)
+          : car.dir < 0
+            ? r.speedMph + car.mph
+            : Math.abs(r.speedMph - car.mph);
         if (closingMph > 30) {
           if (r.isPlayer) {
             this.audio.playSfx('crashhar', { volume: 0.92 });
@@ -1021,7 +1090,13 @@ export class RaceSimulation {
         r.speedMph = Math.min(r.speedMph, car.mph * 0.82);
         r.latVel += r.lat < car.lat ? -8.5 : 8.5;
         if (r.isPlayer) this.audio.playSfx('crashlit', { volume: 0.65 });
-      } else if (r.isPlayer && ds < 4.8 && dLat < 130 && car.dir < 0 && car.hornCooldown <= 0) {
+      } else if (
+        r.isPlayer &&
+        ds < 5.0 &&
+        dLat < (car.crossDir ? 190 : 130) &&
+        (car.dir < 0 || car.crossDir) &&
+        car.hornCooldown <= 0
+      ) {
         car.hornCooldown = 140;
         this.audio.playSfx('bmwlong', { volume: 0.56 });
       }
@@ -1326,16 +1401,37 @@ export class RaceSimulation {
       if (!car.active) continue;
       if (car.hornCooldown > 0) car.hornCooldown -= 1;
 
+      if (car.crossDir) {
+        const smp = this.sampleInfoAt(car.sample);
+        car.lat += car.crossDir * 3.35;
+        const wrapL = -(smp.left + 290);
+        const wrapR = smp.right + 290;
+        if (car.crossDir > 0 && car.lat > wrapR) car.lat = wrapL;
+        else if (car.crossDir < 0 && car.lat < wrapL) car.lat = wrapR;
+        continue;
+      }
+
       car.sample += car.dir * car.mph * 0.00145;
       const smp = this.sampleInfoAt(car.sample);
-      const targetMag = Math.max(110, (car.dir < 0 ? smp.left : smp.right) * 0.52);
+      const frac = car.laneFrac || 0.52;
+      const targetMag = Math.max(110, (car.dir < 0 ? smp.left : smp.right) * frac);
       const desiredLat = car.dir < 0 ? -targetMag : targetMag;
       car.lat += (desiredLat - car.lat) * 0.14;
 
       if (car.sample < this.startSample + 8) {
-        car.sample = Math.min(this.finishSample - 12, this.player.sample + 54);
+        const nextS = this.player.sample + 54 + (car.id % 9) * 5.8;
+        if (nextS >= this.finishSample - 14) {
+          car.active = false;
+        } else {
+          car.sample = nextS;
+        }
       } else if (car.sample > this.finishSample - 6) {
-        car.sample = Math.max(this.startSample + 14, this.player.sample - 22);
+        const prevS = this.player.sample - (24 + (car.id % 7) * 5.2);
+        if (prevS <= this.startSample + 10) {
+          car.active = false;
+        } else {
+          car.sample = prevS;
+        }
       }
     }
   }
@@ -1407,9 +1503,36 @@ export class RaceSimulation {
     this.activeCop = null;
 
     for (const cop of this.cops) {
-      if (!cop.active && Math.abs(p.sample - cop.spawnSample) < 9 && !cop.chasing && cop.stamina > 0) {
+      if (cop.hitSparkTimer > 0) cop.hitSparkTimer -= 1;
+
+      if (cop.active && cop.state === 'crashing') {
+        cop.crashTimer -= 1;
+        cop.sample += cop.mph * 0.00145;
+        cop.mph *= 0.93;
+        cop.lat += cop.latVel;
+        cop.latVel *= 0.88;
+        if (cop.crashTimer % 6 === 0 && cop.animStep < 12) {
+          cop.animStep += 1;
+        }
+        if (cop.crashTimer <= 0) {
+          cop.active = false;
+          cop.state = 'wrecked';
+        }
+        continue;
+      }
+
+      if (
+        !cop.active &&
+        cop.state !== 'wrecked' &&
+        Math.abs(p.sample - cop.spawnSample) < 9 &&
+        !cop.chasing &&
+        cop.stamina > 0
+      ) {
         cop.active = true;
         cop.chasing = true;
+        cop.state = 'riding';
+        cop.animId = 2;
+        cop.animStep = 0;
         cop.sample = Math.max(this.startSample + 5, p.sample - 4.5);
         cop.lat = p.lat + (p.lat > 0 ? -135 : 135);
         cop.mph = Math.max(60, p.speedMph * 0.95);
@@ -1419,7 +1542,7 @@ export class RaceSimulation {
       if (!cop.active) continue;
       this.activeCop = cop;
 
-      const targetMph = p.state === 'riding' ? Math.min(186, p.stats.topMph * 1.04) : 34;
+      const targetMph = p.state === 'riding' ? Math.min(186, p.stats.topMph * 1.04) : 28;
       cop.mph += (targetMph - cop.mph) * 0.055;
       const ds = cop.mph * 0.001526;
       cop.sample += ds;
@@ -1432,6 +1555,15 @@ export class RaceSimulation {
       cop.lat += cop.latVel - smp.bend * ds * 0.58;
       cop.lat = Math.max(-(smp.left - 24), Math.min(smp.right - 24, cop.lat));
 
+      if (cop.swingTicks > 0) {
+        cop.swingTicks -= 1;
+        cop.animStep = cop.swingTicks > 12 ? 0 : cop.swingTicks > 5 ? 1 : 2;
+        if (cop.swingTicks === 0) {
+          cop.animId = 2;
+          cop.animStep = 0;
+        }
+      }
+
       if (cop.attackCooldown > 0) cop.attackCooldown -= 1;
       if (
         p.state === 'riding' &&
@@ -1441,10 +1573,14 @@ export class RaceSimulation {
       ) {
         cop.attackCooldown = 54;
         const pushDir = p.lat >= cop.lat ? 1 : -1;
+        cop.animId = pushDir > 0 ? 16 : 17;
+        cop.animStep = 0;
+        cop.swingTicks = 18;
         p.stamina = Math.max(0, p.stamina - 22);
         p.latVel += pushDir * 11.5;
         p.staggerTimer = 14;
         p.hitSparkTimer = 10;
+        p.lastHitSide = -pushDir;
         this.audio.playSfx('clubimpa', { volume: 0.9 });
         this.playGrunt(p.female);
 
@@ -1452,6 +1588,16 @@ export class RaceSimulation {
           this.triggerCrash(p, p.speedMph * 0.7, pushDir, 'BUSTED BY POLICE!');
           p.state = 'busted';
         }
+      } else if (
+        (p.state === 'crashing' || p.state === 'running') &&
+        p.speedMph < 16 &&
+        Math.abs(cop.sample - p.sample) < 1.55 &&
+        Math.abs(cop.lat - p.lat) < 165
+      ) {
+        // Authentic OG Road Rash Police Arrest: crashing right in front of a pursuing cop busts you!
+        p.state = 'busted';
+        this.audio.playSfx('sirenfst', { volume: 0.85 });
+        this.showBanner(`BUSTED BY OFFICER ${cop.name.toUpperCase()}!`, '#ff4444', 95);
       }
 
       if (p.sample - cop.sample > 56) {
@@ -1516,8 +1662,9 @@ export class RaceSimulation {
     const p = this.player;
     const smp = this.sampleInfoAt(p.sample);
 
-    this.cameraSample = Math.max(1, p.sample - 1.55);
-    this.cameraLat += (p.lat * 0.84 - this.cameraLat) * 0.24;
+    this.cameraSample = Math.max(1, p.sample - 1.52);
+    const targetCamLat = p.lat * 0.93;
+    this.cameraLat += (targetCamLat - this.cameraLat) * 0.34;
     this.cameraHeightOffset = 0;
 
     const dSample = p.sample - prevPlayerSample;
