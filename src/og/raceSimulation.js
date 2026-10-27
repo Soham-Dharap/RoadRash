@@ -41,8 +41,27 @@ const RIVAL_ROSTER = [
   { name: 'Mugsy', aggr: 0.64, weapon: 1, bikeId: 1, female: false }
 ];
 
-const COP_NAMES = ["O'Connor", 'Kowalski', 'Vance', ' Roscoe'];
-const GEAR_THRESHOLDS = [0.0, 0.23, 0.41, 0.58, 0.75, 0.90, 1.35];
+const COP_NAMES = ["O'Connor", 'Kowalski', 'Vance', 'Roscoe'];
+
+// Exact ROADRASH.EXE (0x0046dce4) surface drag & grip tables:
+// [0]=asphalt, [1]=paved/curb shoulder, [2]=dirt/grass shoulder, [3]=rough off-road
+const SURFACE_DRAG = [0, 2, 20, 30];
+const SURFACE_GRIP = [1.0, 0.94, 0.56, 0.44];
+
+// Exact ROADRASH.EXE (0x00464558) AI rival speed bands (MPH) across Levels 1..5
+const AI_LEVEL_MPH_RANGE = [
+  [87, 105],  // Level 1 (Rat tier)
+  [105, 121], // Level 2
+  [122, 140], // Level 3 (Sport tier)
+  [142, 159], // Level 4
+  [158, 176]  // Level 5 (Super tier)
+];
+const COP_LEVEL_MPH = [122, 132, 142, 160, 175];
+
+function mphFromVel(v) {
+  if (v <= 0) return 0;
+  return (v * 41) / 4096;
+}
 
 export class RaceSimulation {
   constructor(assets, audio, courseRenderer, config, onRaceComplete) {
@@ -91,11 +110,16 @@ export class RaceSimulation {
     this.cops = [];
     this.activeCop = null;
 
-    // Camera state for road.cpp::project_road
-    this.cameraSample = Math.max(1, this.startSample - 1.55);
+    // Camera state for road.cpp::project_road (exact race.cpp:4125-4150 close chase + finish/bust crane pull-back)
+    this.cameraSample = Math.max(1, this.startSample - 1.36);
     this.cameraLat = 0;
     this.cameraHeightOffset = 0;
+    this.cameraBackExtra = 0;
     this.headingAccum = 0;
+    this.prevCameraSample = this.cameraSample;
+    this.prevCameraLat = 0;
+    this.prevCameraHeightOffset = 0;
+    this.prevHeadingAccum = 0;
 
     this.initRiders();
     this.initTraffic();
@@ -103,40 +127,77 @@ export class RaceSimulation {
     this.initPolice();
   }
 
+  // Exact DATA/BIKESPEC.RSC + bike.cpp::apply_spec decoding for all 15 OG motorcycles!
   bikeStats(bikeId, isPlayer = false) {
-    if (isPlayer && this.isPoliceMode) {
-      return {
-        cls: 'super',
-        hasNitro: true,
-        nitroCharges: 10,
-        maxNitroCharges: 10,
-        topMph: 204 + (this.config.level || 0) * 6,
-        accel: 1.24 + (this.config.level || 0) * 0.05,
-        steerRate: 10.4,
-        maxBikeCond: 280
-      };
+    const bikes = this.assets.frontend?.bikes;
+    const specId = isPlayer && this.isPoliceMode ? 7 : Math.max(0, Math.min(14, bikeId || 0));
+    const d = bikes?.[specId] || bikes?.[0] || [];
+    const cls = specId < 5 ? 'rat' : specId < 10 ? 'super' : 'sport';
+
+    const mass = d[6] || 196;
+    const riderVal = 75;
+    const weight = mass + 75 + Math.trunc((riderVal - 75) / 8);
+    const steerDiv = mass + Math.trunc(riderVal / 4);
+    const clamp15 = (v) => {
+      const x = Math.max(1, v || 10);
+      return x > 14 ? 15 : x;
+    };
+
+    const throttleRaw = isPlayer && this.isPoliceMode ? 50 : (d[42] || 40);
+    const brakeRaw = d[49] || -112;
+    const throttleMax = Math.trunc((throttleRaw * (mass + 75) * 256) / weight);
+    const brakeMax = Math.trunc((brakeRaw * (mass + 75) * 256) / weight);
+    const throttleUp = Math.max(64, Math.trunc(throttleMax / clamp15(d[43] || 10)));
+    const throttleDown = Math.max(32, Math.trunc(throttleMax / clamp15(d[44] || 128)));
+    const brakeUp = Math.min(-64, Math.trunc(brakeMax / clamp15(d[50] || 10)));
+    const brakeDown = Math.min(-64, Math.trunc(brakeMax / clamp15(d[51] || 10)));
+
+    const turnTicks = Math.max(20, Math.trunc(((d[62] || 38) * (mass + 75)) / steerDiv));
+    const returnTicks = Math.max(18, Math.trunc(((d[63] || 36) * (mass + 75)) / steerDiv));
+    const latScale = d[66] || 120;
+    const maxLatStep = (46 * latScale) / 256; // 21.56 world units/tick in ROADRASH.EXE!
+
+    const gears = [];
+    for (let g = 0; g < 6; g++) {
+      gears.push({
+        rpmRatio: d[9 + g * 4] || 4000 >> g,
+        torqueRatio: d[10 + g * 4] || 240 - g * 8,
+        upVel: d[11 + g * 4] || (g < 5 ? (g + 1) * 3200 : 16777215),
+        downVel: d[12 + g * 4] ?? (g === 0 ? -999 : g * 2800)
+      });
     }
 
-    const raw = this.assets.frontend?.bikes?.[bikeId];
-    const cls = bikeId < 5 ? 'rat' : bikeId < 10 ? 'super' : 'sport';
-    // Custom feature: Nitro / Speed Boost enabled on ALL 15 bikes for the player!
-    const hasNitro = isPlayer ? true : raw ? raw[86] > 0 : cls === 'super';
-    const hp = raw ? (raw[24] | (raw[25] << 8)) : 80;
+    // Exact equilibrium top speed from integrate_speed: b114_top = (torqueRatio_top * throttleMax) >> 16
+    const topTorque = Math.trunc((gears[4].torqueRatio * throttleMax) / 65536);
+    const estTopVel = Math.max(9500, Math.trunc(((topTorque - 8) * 65536) / 130));
+    const topMph = Math.round(mphFromVel(estTopVel));
 
-    const topMphBase =
-      cls === 'rat' ? 116 + (hp % 22) : cls === 'sport' ? 144 + (hp % 24) : 170 + (hp % 26);
-    const accelBase = cls === 'rat' ? 0.58 : cls === 'sport' ? 0.78 : 0.98;
-    const steerBase = cls === 'rat' ? 7.2 : cls === 'sport' ? 8.4 : 9.4;
+    // User custom perk: Nitro / Speed Boost enabled on ALL 15 bikes for the player!
+    // Uses exact BIKESPEC.RSC boost factor (288..384) on Superbikes, and 340 (1.33x torque) on Rat/Sport!
+    const hasNitro = isPlayer ? true : (d[86] || 0) > 0;
+    const nitroBoost = isPlayer && this.isPoliceMode ? 384 : Math.max(328, d[84] || 340);
+    const nitroCharges = isPlayer ? 10 : hasNitro ? d[86] || 8 : 0;
+    const maxBikeCond = isPlayer && this.isPoliceMode ? 320 : Math.max(100, d[81] || 160);
 
     return {
       cls,
+      mass,
+      gears,
+      throttleMax,
+      brakeMax,
+      throttleUp,
+      throttleDown,
+      brakeUp,
+      brakeDown,
+      turnTicks,
+      returnTicks,
+      maxLatStep,
       hasNitro,
-      nitroCharges: isPlayer ? 8 : hasNitro ? 6 : 0,
-      maxNitroCharges: isPlayer ? 8 : hasNitro ? 6 : 0,
-      topMph: topMphBase + (this.config.level || 0) * 5,
-      accel: accelBase + (this.config.level || 0) * 0.05,
-      steerRate: steerBase,
-      maxBikeCond: cls === 'rat' ? 135 : cls === 'sport' ? 155 : 175
+      nitroBoost,
+      nitroCharges,
+      maxNitroCharges: nitroCharges,
+      topMph,
+      maxBikeCond
     };
   }
 
@@ -169,23 +230,37 @@ export class RaceSimulation {
       aggr: 0
     });
     this.riders.push(this.player);
-    this.cameraLat = this.player.lat;
+    this.cameraLat = this.player.lat * 0.75;
+    this.prevCameraLat = this.cameraLat;
+
+    const lv = Math.max(0, Math.min(4, this.config.level || 0));
+    const [minLvMph, maxLvMph] = AI_LEVEL_MPH_RANGE[lv];
 
     for (let i = 0; i < 14; i++) {
       const rdef = RIVAL_ROSTER[i];
-      const lvlBike = Math.min(14, (rdef.bikeId + (this.config.level || 0) * 2) % 15);
+      // Match rival bike class to race level just like 1996 Road Rash!
+      const tierPool = lv <= 1 ? [0, 1, 2, 3, 4, 13, 14] : lv === 2 ? [10, 11, 12, 13, 14, 3] : [5, 6, 7, 8, 9, 10, 11];
+      const lvlBike = tierPool[i % tierPool.length];
       const st = this.bikeStats(lvlBike, false);
       const row = Math.floor((i + 1) / 2);
       const col = (i + 1) % 2;
 
       if (this.isPoliceMode) {
         // Outlaws race hard toward the finish line, paced so a skilled Police Interceptor can hunt all 14!
-        const outlawMph = 112 + (i / 14) * 32 + (this.config.level || 0) * 6;
-        st.topMph = outlawMph;
-        st.accel = 0.72 + (i / 14) * 0.16;
+        st.aiTargetMph = 104 + (i / 13) * 34 + lv * 5;
       } else {
-        const aiScale = 0.85 + (i / 14) * 0.21 + (this.config.level || 0) * 0.025;
-        st.topMph = pStats.topMph * aiScale;
+        // Exact ROADRASH.EXE (0x00464558) level-based rival speeds (not fake player-speed cloning!),
+        // so buying a Superbike genuinely lets you blow past slower tiers while Lv4-5 are 155-175 MPH wars!
+        st.aiTargetMph = minLvMph + (i / 13) * (maxLvMph - minLvMph);
+      }
+      // Calibrate AI bike throttleMax if AI personality target exceeds base bike spec on Lv4-5
+      const neededVel = st.aiTargetMph * 100.5;
+      const neededB114 = Math.trunc((130 * (neededVel / 256)) / 256) + 12;
+      const minThrottleMax = Math.trunc((neededB114 * 65536) / Math.max(180, st.gears[4].torqueRatio));
+      if (minThrottleMax > st.throttleMax) {
+        st.throttleMax = minThrottleMax;
+        st.throttleUp = Math.max(st.throttleUp, Math.trunc(st.throttleMax / 11));
+        st.topMph = Math.round(st.aiTargetMph);
       }
 
       this.riders.push(
@@ -213,12 +288,21 @@ export class RaceSimulation {
   makeRider(opts) {
     return {
       ...opts,
+      prevSample: opts.sample,
+      prevLat: opts.lat,
+      prevAirY: 0,
+      prevLean: 0,
+      vel: 0,      // Exact bike.cpp b.i32(0xec) integer velocity (100 units ~= 1 MPH)
+      b240: 0,     // Exact bike.cpp b.i32(0x240) spooled throttle/brake state
+      b114: 0,     // Exact bike.cpp b.i32(0x114) longitudinal drive/brake force
+      b2dc: 0x2000,// Exact bike.cpp b.i32(0x2dc) engine RPM (0x2000 idle .. 0xffff redline)
+      gearIdx: 0,  // Exact bike.cpp b.i32(0x23c) 0..5 gear index
       speedMph: 0,
       latVel: 0,
       shoveVel: 0,
       lean: 0,
       gear: 1,
-      rpmNorm: 0.16,
+      rpmNorm: 0.0,
       airY: 0,
       airVel: 0,
       offRoad: false,
@@ -554,9 +638,39 @@ export class RaceSimulation {
 
   // ==================== MAIN 60HZ TICK ====================
 
+  snapshotPrevPositions() {
+    this.prevCameraSample = this.cameraSample;
+    this.prevCameraLat = this.cameraLat;
+    this.prevCameraHeightOffset = this.cameraHeightOffset;
+    this.prevHeadingAccum = this.headingAccum;
+
+    for (const r of this.riders) {
+      r.prevSample = r.sample;
+      r.prevLat = r.lat;
+      r.prevAirY = r.airY || 0;
+      r.prevLean = r.lean;
+    }
+    for (const car of this.traffic) {
+      car.prevSample = car.sample;
+      car.prevLat = car.lat;
+    }
+    for (const ped of this.pedestrians) {
+      ped.prevLat = ped.lat;
+    }
+    for (const db of this.downedBikes) {
+      db.prevSample = db.sample;
+      db.prevLat = db.lat;
+    }
+    for (const cop of this.cops) {
+      cop.prevSample = cop.sample;
+      cop.prevLat = cop.lat;
+    }
+  }
+
   step(input) {
     if (this.paused || this.completed) return;
 
+    this.snapshotPrevPositions();
     const prevPlayerSample = this.player.sample;
 
     if (this.countdownTicks > 0) {
@@ -567,7 +681,9 @@ export class RaceSimulation {
         this.goBannerTicks = 55;
         this.audio.playSfx(this.player.female ? 'f_yeah' : 'm_yeah', { volume: 0.85 });
       }
-      this.player.rpmNorm = input.gas ? 0.68 : 0.22;
+      const revTarget = input.gas ? 0xc800 : 0x2800;
+      this.player.b2dc += Math.max(-0x1800, Math.min(0x1800, revTarget - (this.player.b2dc || 0x2000)));
+      this.player.rpmNorm = Math.max(0, Math.min(1, (this.player.b2dc - 0x2000) / (0xffff - 0x2000)));
       this.audio.updateRaceLoops({
         bikeId: this.player.bikeId,
         rpmNorm: this.player.rpmNorm,
@@ -620,6 +736,7 @@ export class RaceSimulation {
   stepAIRider(r) {
     if (r.finished) {
       r.speedMph = Math.max(0, r.speedMph - 1.5);
+      r.vel = Math.round((r.speedMph * 4096) / 41);
       return;
     }
     if (r.state !== 'riding') {
@@ -632,9 +749,10 @@ export class RaceSimulation {
 
     let targetLat = r.aiLaneTarget;
     for (const car of this.traffic) {
+      if (!car.active) continue;
       const ds = car.sample - r.sample;
-      if (ds > 0 && ds < 10 && Math.abs(car.lat - targetLat) < 110) {
-        targetLat = car.lat > 0 ? -155 : 165;
+      if (ds > 0 && ds < 11 && Math.abs(car.lat - targetLat) < 120) {
+        targetLat = car.lat > 0 ? -160 : 165;
         break;
       }
     }
@@ -645,19 +763,26 @@ export class RaceSimulation {
       targetLat = this.player.lat + sideOffset;
     }
 
-    const maxRoadL = -(smp.left - 55);
-    const maxRoadR = smp.right - 55;
+    const maxRoadL = -(smp.left - 58);
+    const maxRoadR = smp.right - 58;
     targetLat = Math.max(maxRoadL, Math.min(maxRoadR, targetLat));
 
+    // Exact feedforward lean to counteract ROADRASH.EXE centrifugal curve push (-bend * ds * 1.5625)
+    const dsEst = r.speedMph * 0.001526;
+    const curveFeedforward = (smp.bend * 0.65 + lookSmp.bend * 0.35) * dsEst * (1.5625 / 21.56);
     const latErr = targetLat - r.lat;
-    const curveAnticipation = lookSmp.bend * 0.012;
-    const steer = Math.max(-1, Math.min(1, latErr * 0.018 + curveAnticipation));
+    const steer = Math.max(-1, Math.min(1, latErr * 0.011 + curveFeedforward));
 
+    // Subtle OG rubber_band pack cohesion (+/- 6%) around authentic ROADRASH.EXE level speed!
     let speedMul = 1.0;
-    if (distToPlayer > 30) speedMul = 0.90;
-    else if (distToPlayer < -24) speedMul = 1.09;
+    if (!this.isPoliceMode) {
+      if (distToPlayer > 38) speedMul = 0.94;
+      else if (distToPlayer < -32) speedMul = 1.06;
+    }
+    const aiGoalMph = (r.stats.aiTargetMph || r.stats.topMph) * speedMul;
 
-    const cornerCaution = Math.abs(lookSmp.bend) > 45 && r.speedMph > r.stats.topMph * 0.84;
+    const futureCentrifugal = Math.abs(lookSmp.bend) * dsEst * 1.5625;
+    const cornerCaution = futureCentrifugal > 19.2;
 
     if (r.aiCooldown > 0) r.aiCooldown -= 1;
     if (this.ticks > 150 && r.attackPhase === 'idle' && r.aiCooldown <= 0) {
@@ -673,16 +798,38 @@ export class RaceSimulation {
     this.integrateMotorcyclePhysics(
       r,
       {
-        throttle: !cornerCaution && r.speedMph < r.stats.topMph * speedMul,
-        brake: cornerCaution,
+        throttle: !cornerCaution && r.speedMph < aiGoalMph,
+        brake: cornerCaution && r.speedMph > 55,
         steer
       },
       speedMul
     );
   }
 
-  integrateMotorcyclePhysics(r, ctrl, topMul = 1.0) {
+  // Exact surface_class (bike.cpp:312-327): 0=road, 1=paved/city curb, 2=dirt shoulder, 3=rough off-road
+  surfaceClassAt(smp, lat) {
+    if (lat > -smp.left && lat < smp.right) return 0;
+    if (smp.flags & 0x20) return 0;
+    if (smp.flags & 0x18) return smp.ttype === 0 ? 1 : 2;
+    if (smp.ttype === 3) return 1;
+    if (lat >= smp.right) {
+      if (lat >= smp.right + smp.shR) return 3;
+      if (smp.ttype === 0) return 1;
+      return lat <= smp.right + 48 ? 0 : 2;
+    }
+    if (lat <= -(smp.left + smp.shL)) return 3;
+    if (smp.ttype === 0) return 1;
+    return lat >= -(smp.left + 48) ? 0 : 2;
+  }
+
+  integrateMotorcyclePhysics(r, ctrl) {
     const smp = this.sampleInfoAt(r.sample);
+    const st = r.stats;
+
+    // Keep integer velocity synced if external impacts/crashes modified speedMph
+    if (Math.abs(mphFromVel(r.vel || 0) - r.speedMph) > 0.35) {
+      r.vel = Math.max(0, Math.round((r.speedMph * 4096) / 41));
+    }
 
     if (r.nitroTicks > 0) r.nitroTicks -= 1;
     if (r.isPlayer && r.nitroTicks <= 0 && r.nitroCharges < r.maxNitroCharges) {
@@ -698,67 +845,119 @@ export class RaceSimulation {
       r.stamina = Math.min(r.maxStamina, r.stamina + (r.isPlayer ? 0.04 : 0.015));
     }
 
-    const nitroBoost = r.nitroTicks > 0 ? 1.28 : 1.0;
-    const maxMph = r.stats.topMph * topMul * nitroBoost;
+    const surf = this.surfaceClassAt(smp, r.lat);
+    r.offRoad = surf >= 2;
+    r.skidding = Boolean(ctrl.brake && r.speedMph > 32) || (surf >= 2 && Math.abs(r.lean) > 0.72 && r.speedMph > 65);
 
-    const offRoadLeft = r.lat < -smp.left;
-    const offRoadRight = r.lat > smp.right;
-    r.offRoad = offRoadLeft || offRoadRight;
-    r.skidding = Boolean(ctrl.brake && r.speedMph > 30);
-
-    // 1. Throttle / Brake / Slope / Dirt Drag (bike.cpp)
-    if (ctrl.throttle && r.airY <= 1) {
-      const ratio = r.speedMph / Math.max(1, maxMph);
-      const torqueCurve = Math.max(0.16, 1.08 - ratio * 0.82);
-      r.speedMph += r.stats.accel * torqueCurve * (r.nitroTicks > 0 ? 2.05 : 1.0);
-    } else {
-      r.speedMph -= 0.19 + (r.speedMph / 190) * 0.24;
-    }
+    // 1. Exact bike.cpp drive_mode + throttle/brake spooling + race.cpp:3355 post-gear Nitro boost!
+    let b240 = r.b240 || 0;
+    let b114 = 0;
+    const gearIdx = Math.max(0, Math.min(5, r.gearIdx || 0));
+    const gears = st.gears;
 
     if (ctrl.brake && r.airY <= 1) {
-      r.speedMph -= 1.45;
+      if ((r.vel || 0) <= 0) {
+        b240 = 0;
+      } else {
+        const limit = st.brakeMax; // negative
+        if (b240 > limit) {
+          b240 = Math.max(limit, b240 + st.brakeDown);
+        }
+      }
+      b114 = b240 >> 8;
+    } else if (ctrl.throttle && r.airY <= 1) {
+      const target = st.throttleMax;
+      if (b240 < target) {
+        b240 = Math.min(target, b240 + st.throttleUp);
+      } else if (b240 > target) {
+        b240 = Math.max(target, b240 - st.throttleDown);
+      }
+      if (b240 < 1) {
+        b114 = b240 >> 8;
+      } else {
+        b114 = Math.trunc((gears[gearIdx].torqueRatio * b240) / 65536);
+        if (r.nitroTicks > 0) {
+          b114 = Math.trunc((b114 * st.nitroBoost) / 256);
+        }
+      }
+    } else {
+      // Coasting back toward 0
+      if (b240 > 0) b240 = Math.max(0, b240 - st.throttleDown);
+      else if (b240 < 0) b240 = Math.min(0, b240 - st.brakeUp);
+      b114 = b240 >= 0 ? Math.trunc((gears[gearIdx].torqueRatio * b240) / 65536) : b240 >> 8;
     }
+    r.b240 = b240;
+    r.b114 = b114;
 
-    r.speedMph -= smp.rise * 0.0018;
-    if (r.offRoad && r.airY <= 1) {
-      r.speedMph -= 0.44 + r.speedMph * 0.0065;
-    }
-    r.speedMph = Math.max(0, Math.min(maxMph + 14, r.speedMph));
+    // 2. Exact bike.cpp::shift_gears (0..5)
+    let g = gearIdx;
+    if (r.vel > gears[g].upVel && g < 5) g += 1;
+    else if (r.vel < gears[g].downVel && g > 0) g -= 1;
+    r.gearIdx = g;
+    r.gear = g + 1;
 
-    // 2. 6-Speed Gearbox & Analog Tachometer RPM (bike.cpp::update_engine_rpm)
-    const speedRatio = r.speedMph / Math.max(1, r.stats.topMph);
-    let newGear = 1;
-    for (let g = 1; g <= 6; g++) {
-      if (speedRatio >= GEAR_THRESHOLDS[g - 1]) newGear = g;
-    }
-    r.gear = newGear;
-    const gLow = GEAR_THRESHOLDS[newGear - 1];
-    const gHigh = GEAR_THRESHOLDS[newGear];
-    const inGearFrac = Math.max(0, Math.min(1, (speedRatio - gLow) / Math.max(0.12, gHigh - gLow)));
-    const targetRpm = 0.20 + inGearFrac * 0.72 + (r.nitroTicks > 0 ? 0.08 : 0);
-    r.rpmNorm += (targetRpm - r.rpmNorm) * 0.24;
+    // 3. Exact bike.cpp::integrate_speed (aero=130, rolling=8, surface_drag=[0,2,20,30], hill rise)
+    const speedAbs = Math.abs(r.vel || 0);
+    const onGround = r.airY <= 1;
+    const aeroBase = onGround ? speedAbs : speedAbs >> 2;
+    const contactDrag = onGround ? ((SURFACE_DRAG[surf] * speedAbs) >> 14) + 8 : 0;
+    const aeroDrag = (130 * (aeroBase >> 8)) >> 8;
+    const turnScrub = onGround ? Math.trunc(Math.abs(r.lean) * (r.skidding ? 12 : 3)) : 0;
+    const slopeAccel = onGround ? Math.trunc(-smp.rise * 0.085) : 0;
 
-    // 3. Progressive Lean & Exact race.cpp Centrifugal Curve Sweep!
-    const steerAuthority = r.staggerTimer > 0 ? 0.12 : Math.min(1.0, 0.24 + r.speedMph / 42);
-    const effSteer = r.staggerTimer > 0 ? 0 : ctrl.steer;
-    if (Math.abs(effSteer) > 0.04) {
-      r.lean += (effSteer - r.lean) * 0.14 * steerAuthority;
-    } else if (r.staggerTimer <= 0) {
-      r.lean *= 0.84;
-      if (Math.abs(r.lean) < 0.01) r.lean = 0;
+    const accel = b114 + slopeAccel - (aeroDrag + contactDrag + turnScrub);
+    let nextVel = (r.vel || 0) + accel;
+    if (nextVel < 1) {
+      nextVel = b114 > 0 ? 100 : 0;
     }
+    r.vel = nextVel;
+    r.speedMph = mphFromVel(nextVel);
+
+    // 4. Exact bike.cpp::update_engine_rpm (+0x2dc: 0x2000..0xffff, +-0x2000/tick slew!)
+    const rpmRatio = gears[g].rpmRatio;
+    const rawTarget = Math.min(0xffff, Math.max(0x2000, Math.trunc((rpmRatio * nextVel) / 256) + 0x2000));
+    const curRpm = r.b2dc || 0x2000;
+    let nextRpm = curRpm;
+    if (!onGround) {
+      nextRpm = Math.min(0xffff, curRpm + 0x1000);
+    } else if (rawTarget > curRpm + 0x2000) {
+      nextRpm = curRpm + 0x2000;
+    } else if (rawTarget < curRpm - 0x2000) {
+      nextRpm = curRpm - 0x2000;
+    } else {
+      nextRpm = rawTarget;
+    }
+    r.b2dc = nextRpm;
+    r.rpmNorm = Math.max(0, Math.min(1, (nextRpm - 0x2000) / (0xffff - 0x2000)));
+
+    // 5. Exact bike.cpp::steer + race.cpp:378,1830 Centrifugal Curve Sweep (-bend * ds * 1.5625)!
+    const speedSteerCap = r.vel <= 0 ? 0 : Math.min(1.0, r.vel / 4800);
+    const effSteer = r.staggerTimer > 0 ? 0 : Math.max(-1, Math.min(1, ctrl.steer)) * speedSteerCap;
+    const targetLean = effSteer;
+    const leanStep =
+      Math.abs(targetLean) > Math.abs(r.lean) && targetLean * r.lean >= 0
+        ? 1 / st.turnTicks
+        : 1 / st.returnTicks;
+
+    if (r.lean < targetLean) {
+      r.lean = Math.min(targetLean, r.lean + leanStep * (r.lean < 0 ? 1.35 : 1.0));
+    } else if (r.lean > targetLean) {
+      r.lean = Math.max(targetLean, r.lean - leanStep * (r.lean > 0 ? 1.35 : 1.0));
+    }
+    if (Math.abs(targetLean) < 0.01 && Math.abs(r.lean) < 0.012) r.lean = 0;
     r.lean = Math.max(-1, Math.min(1, r.lean));
 
-    const ds = r.speedMph * 0.001526;
-    const centrifugalPush = -smp.bend * ds * 0.58;
-    const leanLatDrive = r.lean * r.stats.steerRate * steerAuthority * (r.offRoad ? 0.75 : 1.0);
+    // Exact ROADRASH.EXE longitudinal sample step: (vel / 256) / 256
+    const ds = nextVel / 65536;
+    const centrifugalPush = -smp.bend * ds * (r.skidding && r.isPlayer ? 2.45 : 1.5625);
+    const leanLatDrive = r.lean * st.maxLatStep * SURFACE_GRIP[surf];
 
     r.shoveVel = (r.shoveVel || 0) * 0.90;
     if (Math.abs(r.shoveVel) < 0.05) r.shoveVel = 0;
-    r.latVel = r.latVel * 0.78 + leanLatDrive * 0.30;
+    r.latVel = r.latVel * 0.55 + leanLatDrive * 0.45;
     r.lat += r.latVel + r.shoveVel + centrifugalPush;
 
-    // 4. Advance Forward Grounded on Road (exact ROADRASH.EXE: no fake hilltop launches!)
+    // 6. Advance Forward Grounded on Road (exact ROADRASH.EXE: no fake hilltop launches!)
     r.sample += ds;
 
     // Settle any tiny tire bump (e.g. riding over a downed bike) cleanly back to asphalt
@@ -1542,17 +1741,20 @@ export class RaceSimulation {
       if (!cop.active) continue;
       this.activeCop = cop;
 
-      const targetMph = p.state === 'riding' ? Math.min(186, p.stats.topMph * 1.04) : 28;
-      cop.mph += (targetMph - cop.mph) * 0.055;
+      const lv = Math.max(0, Math.min(4, this.config.level || 0));
+      const baseCopMph = COP_LEVEL_MPH[lv];
+      const targetMph = p.state === 'riding' ? Math.max(baseCopMph, Math.min(182, p.speedMph * 1.03)) : 26;
+      cop.mph += (targetMph - cop.mph) * 0.048;
       const ds = cop.mph * 0.001526;
       cop.sample += ds;
 
       const smp = this.sampleInfoAt(cop.sample);
       const desiredLat = p.lat + (cop.lat >= p.lat ? 62 : -62);
       const latErr = desiredLat - cop.lat;
-      cop.lean = Math.max(-1, Math.min(1, latErr * 0.02));
-      cop.latVel = cop.latVel * 0.78 + Math.max(-6.8, Math.min(6.8, latErr * 0.14));
-      cop.lat += cop.latVel - smp.bend * ds * 0.58;
+      const curveComp = smp.bend * ds * (1.5625 / 19.5);
+      cop.lean = Math.max(-1, Math.min(1, latErr * 0.016 + curveComp));
+      cop.latVel = cop.latVel * 0.60 + cop.lean * 19.5 * 0.40;
+      cop.lat += cop.latVel - smp.bend * ds * 1.5625;
       cop.lat = Math.max(-(smp.left - 24), Math.min(smp.right - 24, cop.lat));
 
       if (cop.swingTicks > 0) {
@@ -1662,10 +1864,22 @@ export class RaceSimulation {
     const p = this.player;
     const smp = this.sampleInfoAt(p.sample);
 
-    this.cameraSample = Math.max(1, p.sample - 1.52);
-    const targetCamLat = p.lat * 0.93;
-    this.cameraLat += (targetCamLat - this.cameraLat) * 0.34;
-    this.cameraHeightOffset = 0;
+    // Exact race.cpp:4140-4146 crane-shot pull-back & lift on finish, arrest, or bike wreck!
+    if (p.finished || p.state === 'busted' || p.state === 'wrecked') {
+      this.cameraHeightOffset = Math.min(260, this.cameraHeightOffset + 1.5);
+      this.cameraBackExtra = Math.min(3.2, (this.cameraBackExtra || 0) + 0.02);
+    } else {
+      this.cameraHeightOffset = Math.max(0, this.cameraHeightOffset - 1.5);
+      this.cameraBackExtra = Math.max(0, (this.cameraBackExtra || 0) - 0.02);
+    }
+
+    this.cameraSample = Math.max(1, p.sample - 1.36 - (this.cameraBackExtra || 0));
+
+    // Exact race.cpp:4130-4135 lateral camera tracking: off = 0.75 * d, clamped within +-200 of rider!
+    let targetCamLat = p.lat * 0.75;
+    if (p.lat - targetCamLat > 200) targetCamLat = p.lat - 200;
+    else if (p.lat - targetCamLat < -200) targetCamLat = p.lat + 200;
+    this.cameraLat += (targetCamLat - this.cameraLat) * 0.55;
 
     const dSample = p.sample - prevPlayerSample;
     if (Math.abs(dSample) < 2.0) {

@@ -102,13 +102,16 @@ export class HudRenderer {
     }
 
     // 3. Exact hud.cpp elliptical perspective gauge needles:
-    // 0 MPH / 0 RPM = -90 deg (-PI/2), 100 MPH / 6k RPM = 0 deg (12 o'clock), 200 MPH / 12k RPM = +90 deg (+PI/2)
-    const speedFrac = Math.max(0, Math.min(1.06, speedMph / 200));
-    const speedAngle = -Math.PI * 0.5 + speedFrac * Math.PI;
+    // Speedometer: 0 MPH = -90 deg (-1024), 100 MPH = 0 deg (12 o'clock), 200 MPH = +90 deg (+1024)
+    // Tachometer: driven directly by bike.cpp b2dc engine RPM (idle ~2.2k RPM, shifts 6.8k->11.8k redline!)
+    const vel = p.vel !== undefined ? p.vel : speedMph * 100.5;
+    const speedAng4096 = Math.max(-1024, Math.min(1120, (vel * 20.5) / 200 - 1024));
+    const speedAngle = (speedAng4096 / 2048) * Math.PI;
     this.drawNeedle(ctx, dashX + 250, 449, 44, 28, speedAngle);
 
-    const rpmFrac = Math.max(0.05, Math.min(1.04, p.rpmNorm));
-    const rpmAngle = -Math.PI * 0.5 + rpmFrac * Math.PI;
+    const b2dc = p.b2dc !== undefined ? p.b2dc : 0x2000 + p.rpmNorm * (0xffff - 0x2000);
+    const rpmAng4096 = Math.max(-960, Math.min(1080, b2dc / 32 - 1024));
+    const rpmAngle = (rpmAng4096 / 2048) * Math.PI;
     this.drawNeedle(ctx, dashX + 388, 441, 28, 20, rpmAngle);
 
     // 4. Authentic Badloc LCD & name readouts matching ROADRASH.EXE hudLayout
@@ -144,16 +147,17 @@ export class HudRenderer {
       this.drawGapArrow(ctx, dashX + 422, ahead ? 401 : 403, ahead);
     }
 
-    // 5. Top-left status badges (Miles Left, Gear, Unlocked OG Weapon Switcher [Q])
+    // 5. Sleek top-left status badges (Miles Left, Gear, Speed MPH & Unlocked OG Weapon Switcher [Q])
     const milesLeft = Math.max(0, (sim.finishSample - p.sample) / 330).toFixed(1);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.66)';
-    ctx.fillRect(8, 8, 176, 24);
-    this.drawSmallText(ctx, `LEFT: ${milesLeft} MI • GEAR ${p.gear}`, 14, 12, '#defff0');
+    const mphInt = Math.floor(speedMph);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.58)';
+    ctx.fillRect(8, 8, 196, 22);
+    this.drawSmallText(ctx, `${mphInt} MPH • GR ${p.gear} • ${milesLeft} MI`, 13, 11, '#defff0');
 
     const wDef = OG_WEAPONS[p.weapon] || OG_WEAPONS[0];
-    ctx.fillStyle = p.weapon === 3 ? 'rgba(28, 92, 200, 0.88)' : p.weapon > 0 ? 'rgba(185, 62, 16, 0.88)' : 'rgba(52, 56, 62, 0.85)';
-    ctx.fillRect(8, 36, 152, 22);
-    this.drawSmallText(ctx, `WPN [Q]: ${wDef.key}`, 14, 39, '#ffff60');
+    ctx.fillStyle = p.weapon === 3 ? 'rgba(28, 92, 200, 0.82)' : p.weapon > 0 ? 'rgba(185, 62, 16, 0.82)' : 'rgba(52, 56, 62, 0.78)';
+    ctx.fillRect(8, 33, 148, 20);
+    this.drawSmallText(ctx, `WPN [Q]: ${wDef.key}`, 13, 35, '#ffff60');
 
     // 6. Top-right Police Mode Radar OR Cop Pursuit + Nitro Status
     if (sim.isPoliceMode) {

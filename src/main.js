@@ -495,8 +495,10 @@ function frameLoop(nowMs) {
       accumulatorMs -= FIXED_DT;
       steps++;
     }
+    if (accumulatorMs > FIXED_DT) accumulatorMs = 0;
     if (appState === 'racing' && raceSim) {
-      courseRenderer.renderRaceFrame(uiCtx, raceSim);
+      const alpha = accumulatorMs / FIXED_DT;
+      courseRenderer.renderRaceFrame(uiCtx, raceSim, alpha);
       hudRenderer.render(uiCtx, raceSim, activeDashImg);
     }
   }

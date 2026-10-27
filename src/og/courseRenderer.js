@@ -397,10 +397,10 @@ export class CourseRenderer {
       const rxB = b.relX;
       const ryB = b.relY;
 
-      const vA = a.sampleIdx * 0.5;
-      const vB = (a.sampleIdx + 1) * 0.5;
+      const vA = a.sampleIdx;
+      const vB = a.sampleIdx + 1;
 
-      // ---- 1. ROAD SURFACE PANELS (exact road_panels.cpp mirrored UVs!) ----
+      // ---- 1. ROAD SURFACE PANELS (exact road_panels.cpp 1.0 tile per 16-ft sample & mirrored UVs!) ----
       const isStart = Math.abs(a.sampleIdx - this.startSample) <= 1;
       const isFinish = Math.abs(a.sampleIdx - this.finishSample) <= 1;
       const isCrosswalk = (flags & 8) !== 0;
@@ -427,7 +427,7 @@ export class CourseRenderer {
         const hLB2 = leftB * 0.5;
         const hRA2 = rightA * 0.5;
         const hRB2 = rightB * 0.5;
-        const dashWhite = ((a.sampleIdx >> 1) & 1) === 0;
+        const dashWhite = (a.sampleIdx & 1) === 0;
         const outerTid = dashWhite ? tidWhite : tidPlain;
         const centerTid = (flags & 16) && !(flags & 32) ? (dashWhite ? tidWhite : tidPlain) : tidYellow;
 
@@ -463,7 +463,7 @@ export class CourseRenderer {
           rxB, ryB, zB, 0, vB, shB
         );
       } else {
-        const dash = ((a.sampleIdx >> 1) & 1) === 0;
+        const dash = (a.sampleIdx & 1) === 0;
         const centerTid = flags & 16 ? (dash ? tidWhite : tidPlain) : tidYellow;
         const bkRoad = this.getBucket(centerTid, false, true, 0x3b3d42, 300);
         // Mirrored around lat = 0 so yellow stripe at u=0 sits dead-center!
@@ -779,12 +779,27 @@ export class CourseRenderer {
 
   // ==================== MAIN RACE FRAME RENDER ====================
 
-  renderRaceFrame(ctx2d, sim) {
+  renderRaceFrame(ctx2d, sim, alpha = 1) {
     if (!this.course) return;
 
-    const camSample = Math.max(1, sim.cameraSample);
-    const camLat = sim.cameraLat;
-    const camEyeHeight = BASE_CAM_HEIGHT + sim.cameraHeightOffset;
+    const a = sim.paused ? 1 : Math.max(0, Math.min(1, alpha));
+    const lerp = (prev, cur) =>
+      prev !== undefined && Math.abs(cur - prev) < 8 ? prev + (cur - prev) * a : cur;
+
+    const camSample = Math.max(1, lerp(sim.prevCameraSample, sim.cameraSample));
+    const camLat =
+      sim.prevCameraLat !== undefined
+        ? sim.prevCameraLat + (sim.cameraLat - sim.prevCameraLat) * a
+        : sim.cameraLat;
+    const camEyeHeight =
+      BASE_CAM_HEIGHT +
+      (sim.prevCameraHeightOffset !== undefined
+        ? sim.prevCameraHeightOffset + (sim.cameraHeightOffset - sim.prevCameraHeightOffset) * a
+        : sim.cameraHeightOffset);
+    const headingAccum =
+      sim.prevHeadingAccum !== undefined
+        ? sim.prevHeadingAccum + (sim.headingAccum - sim.prevHeadingAccum) * a
+        : sim.headingAccum;
 
     this.lastCamLat = camLat;
     this.lastCamEyeHeight = camEyeHeight;
@@ -801,10 +816,10 @@ export class CourseRenderer {
     ctx2d.imageSmoothingEnabled = false;
 
     const inTunnel = slices[0]?.raw?.[10] === 1;
-    this.drawHorizonAndClouds(ctx2d, sim.headingAccum, inTunnel);
+    this.drawHorizonAndClouds(ctx2d, headingAccum, inTunnel);
     ctx2d.drawImage(this.glCanvas, 0, 0, this.viewW, this.viewH);
 
-    this.drawWorldSprites(ctx2d, sim);
+    this.drawWorldSprites(ctx2d, sim, a);
     this.drawRearViewMirror(ctx2d, sim);
 
     ctx2d.restore();
@@ -847,10 +862,13 @@ export class CourseRenderer {
     }
   }
 
-  drawWorldSprites(ctx2d, sim) {
+  drawWorldSprites(ctx2d, sim, alpha = 1) {
     const drawList = [];
     const slices = this.slices;
     if (!slices.length) return;
+
+    const interp = (prev, cur, maxJump = 8) =>
+      prev !== undefined && Math.abs(cur - prev) < maxJump ? prev + (cur - prev) * alpha : cur;
 
     // 1. Roadside Scenery Objects (exact scenery.cpp:103 scale: (rawSize / 4) * scalePx)
     for (let i = 0; i < slices.length - 1; i++) {
@@ -891,7 +909,9 @@ export class CourseRenderer {
     // 2. Traffic Cars / Trucks / Taxis / Porsches + Cross-Intersection Cars
     for (const car of sim.traffic) {
       if (!car.active) continue;
-      const proj = this.projectWorldPoint(car.sample, car.lat, 0);
+      const cs = interp(car.prevSample, car.sample, 6);
+      const cl = interp(car.prevLat, car.lat, 120);
+      const proj = this.projectWorldPoint(cs, cl, 0);
       if (!proj || proj.sx < -320 || proj.sx > this.viewW + 320) continue;
       drawList.push({
         depth: proj.depth,
@@ -902,7 +922,8 @@ export class CourseRenderer {
     // 3. Pedestrians
     for (const ped of sim.pedestrians) {
       if (!ped.active) continue;
-      const proj = this.projectWorldPoint(ped.sample, ped.lat, ped.airY || 0);
+      const pl = interp(ped.prevLat, ped.lat, 80);
+      const proj = this.projectWorldPoint(ped.sample, pl, ped.airY || 0);
       if (!proj || proj.sx < -180 || proj.sx > this.viewW + 180) continue;
       drawList.push({
         depth: proj.depth,
@@ -913,7 +934,9 @@ export class CourseRenderer {
     // 4. Downed Motorcycles lying on asphalt
     for (const db of sim.downedBikes) {
       if (!db.active) continue;
-      const proj = this.projectWorldPoint(db.sample, db.lat, 0);
+      const dbs = interp(db.prevSample, db.sample, 4);
+      const dbl = interp(db.prevLat, db.lat, 80);
+      const proj = this.projectWorldPoint(dbs, dbl, 0);
       if (!proj || proj.sx < -220 || proj.sx > this.viewW + 220) continue;
       drawList.push({
         depth: proj.depth,
@@ -924,8 +947,10 @@ export class CourseRenderer {
     // 5. Motorcycle Police Officer
     for (const cop of sim.cops) {
       if (!cop.active) continue;
-      const proj = this.projectWorldPoint(cop.sample, cop.lat, cop.airY || 0);
-      if (!proj || proj.depth < 270 || proj.sx < -220 || proj.sx > this.viewW + 220) continue;
+      const cps = interp(cop.prevSample, cop.sample, 4);
+      const cpl = interp(cop.prevLat, cop.lat, 90);
+      const proj = this.projectWorldPoint(cps, cpl, cop.airY || 0);
+      if (!proj || proj.depth < 185 || proj.sx < -220 || proj.sx > this.viewW + 220) continue;
       drawList.push({
         depth: proj.depth,
         draw: () => this.drawCopSprite(ctx2d, cop, proj)
@@ -935,8 +960,11 @@ export class CourseRenderer {
     // 6. All 15 Riders (14 Outlaw/AI Rivals + Player / Police Interceptor)
     for (const r of sim.riders) {
       if (r.state === 'busted' && !r.isPlayer) continue;
-      const proj = this.projectWorldPoint(r.sample, r.lat, r.airY || 0);
-      if (!proj || (!r.isPlayer && proj.depth < 270) || proj.sx < -260 || proj.sx > this.viewW + 260) {
+      const rs = interp(r.prevSample, r.sample, 4);
+      const rl = interp(r.prevLat, r.lat, 90);
+      const ray = interp(r.prevAirY, r.airY || 0, 40);
+      const proj = this.projectWorldPoint(rs, rl, ray);
+      if (!proj || (!r.isPlayer && proj.depth < 185) || proj.sx < -260 || proj.sx > this.viewW + 260) {
         continue;
       }
       const clipY = r.isPlayer ? VIEW_H : Math.min(VIEW_H, proj.clipY + 4);
@@ -1146,7 +1174,7 @@ export class CourseRenderer {
     // Exact actor_render.cpp:35-46 hotspot anchoring [ox, oy, nw, nh]:
     // swinging the Police Nightstick (frame 5: ox=49, nw=64) NEVER shifts the bike tire sideways!
     const [ox, oy, nw, nh] = meta;
-    let sizeMul = cop.isPlayer ? 1.86 : 1.78;
+    let sizeMul = cop.isPlayer ? 1.72 : 1.70;
     if (cellFlags & 0x10000) sizeMul *= 2;
     if (cellFlags & 0x20000) sizeMul *= 4;
     const copScale = sizeMul * proj.scalePx;
@@ -1260,7 +1288,7 @@ export class CourseRenderer {
     // Exact actor_render.cpp:35-46 hotspot anchoring [ox, oy, nw, nh]:
     // weapon swings (club/chain/baton/kick) extend out from the bike without shifting the tire!
     const [ox, oy, nw, nh] = meta;
-    let sizeMul = 1.92;
+    let sizeMul = r.isPlayer ? 1.74 : 1.82;
     if (cellFlags & 0x10000) sizeMul *= 2;
     if (cellFlags & 0x20000) sizeMul *= 4;
     const riderScale = sizeMul * proj.scalePx;

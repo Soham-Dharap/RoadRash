@@ -82,7 +82,8 @@ export class FrontendUI {
 
     this.thrashLevel = 0; // 0..4 -> Level 1..5
     this.thrashCourse = 0; // 0..5
-    this.thrashBikeSlot = 11; // Default Thrash bike unlocked (Diablo Vipera, or cycle all 15!)
+    this.thrashBikeSlot = 4; // Authentic OG Level 1 Rat bike default (all 15 bikes unlocked via Bike/Wpn or TAB!)
+    this.thrashCustomBike = false;
     this.selectedWeapon = 2; // All OG weapons unlocked! Default Steel Chain (or Police Baton in Police Mode)
 
     this.policeLevel = 1; // Level 2 default for exciting chase pacing
@@ -666,12 +667,18 @@ export class FrontendUI {
       const alreadyOwned = ownedSet.has(b.bikeId);
       const price = this.bikePrice(b.bikeId);
       const netCost = alreadyOwned ? 0 : Math.max(0, price - this.tradeInValue());
+      const rawSpec = S(b.descSlot).replace('%d', price.toLocaleString());
+      const specLines = rawSpec.split('\n');
+      const formattedDesc =
+        specLines.length >= 6
+          ? `${specLines[0]}\n${specLines[1]}  •  ${specLines[2]}  •  ${specLines[3]}  •  ${specLines[4]}  •  ${specLines[5]}`
+          : rawSpec;
 
       return {
         bg: `bikes/${b.cls}/${b.slug}.jpg`,
         statusBanner: `${S(b.nameSlot)} [NITRO BOOST]  •  ${alreadyOwned ? 'OWNED IN GARAGE ($0 Switch)' : `Price: $${price.toLocaleString()} (Net: $${netCost.toLocaleString()})`}  •  Cash: $${this.career.cash.toLocaleString()}`,
-        descRect: [16, 336, 608, 76],
-        descFontSize: 18,
+        descRect: [16, 326, 608, 88],
+        descFontSize: 16,
         extraDarkRects: [
           [0, 420, 80, 60],
           [80, 420, 200, 30],
@@ -685,13 +692,13 @@ export class FrontendUI {
             label: alreadyOwned
               ? `Ride Now ($0)`
               : `${S(217) || 'Buy'} ($${netCost.toLocaleString()})`,
-            desc: S(b.descSlot),
+            desc: formattedDesc,
             action: () => this.tryBuyBike(b)
           },
           {
             rect: [360, 450, 200, 30],
             label: S(218) || 'Exit',
-            desc: S(b.descSlot),
+            desc: formattedDesc,
             action: () => this.go('showroom', this.inspectSlot % 5)
           }
         ]
@@ -807,8 +814,9 @@ export class FrontendUI {
               : {
                   rect: gridRects[6],
                   label: `Bike/Wpn ↻`,
-                  desc: `Bike: ${activeBikeName} [NITRO] (15/15 Unlocked)\nWeapon: ${wDef.name} [Q to cycle]\nLevel: ${level + 1}\n\nClick to switch Bike (or press TAB for Bike, Q for Weapon)!`,
+                  desc: `Bike: ${activeBikeName} [NITRO] (15/15 Unlocked)\nWeapon: ${wDef.name} [Q to cycle]\nLevel: ${level + 1} [L to cycle]\n\nClick or press TAB to switch Bike (Rat / Sport / Super)!`,
                   action: () => {
+                    this.thrashCustomBike = true;
                     this.thrashBikeSlot = (this.thrashBikeSlot + 1) % SHOWROOM_BIKES.length;
                   }
                 },
@@ -1302,6 +1310,7 @@ export class FrontendUI {
     if (e.code === 'Tab') {
       if (this.screen === 'thrash_tracks') {
         const step = e.shiftKey ? -1 : 1;
+        this.thrashCustomBike = true;
         this.thrashBikeSlot =
           (this.thrashBikeSlot + step + SHOWROOM_BIKES.length) % SHOWROOM_BIKES.length;
         this.audio.playSfx('punchlig', { volume: 0.55, rate: 1.15 });
@@ -1315,6 +1324,21 @@ export class FrontendUI {
         e.preventDefault();
         return;
       }
+    }
+
+    if (e.code === 'KeyL' && (this.screen === 'thrash_tracks' || this.screen === 'police_tracks')) {
+      const step = e.shiftKey ? -1 : 1;
+      if (this.screen === 'thrash_tracks') {
+        this.thrashLevel = (this.thrashLevel + step + 5) % 5;
+        if (!this.thrashCustomBike) {
+          this.thrashBikeSlot = [4, 4, 5, 10, 11][this.thrashLevel];
+        }
+      } else {
+        this.policeLevel = (this.policeLevel + step + 5) % 5;
+      }
+      this.audio.playSfx('punchlig', { volume: 0.55, rate: 1.15 });
+      e.preventDefault();
+      return;
     }
 
     if (
