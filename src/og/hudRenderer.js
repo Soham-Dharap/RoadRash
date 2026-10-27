@@ -1,9 +1,12 @@
 // Authentic 1996 Road Rash Cockpit HUD Renderer (matching hud.cpp::compose)
+// Renders BIGMETER.RRI behind the cockpit cutouts (134,424 / 292,380 / 456,424),
+// blits DASH_RAT / DASH_SPORT / DASH_SUPER over top, draws perspective elliptical needles,
+// RRBadloc LCD odometer/place/names, and equipped weapon / gear / nitro / cop status!
 
 export class HudRenderer {
   constructor(assets) {
     this.assets = assets;
-    this.mode = 0; // 0 = Full Cockpit, 1 = Mini Speedo, 2 = Off (F10 cycles)
+    this.mode = 0; // 0 = Full Cockpit, 1 = Mini Speedo, 2 = Off (F10 / H cycles)
   }
 
   cycleMode() {
@@ -14,7 +17,6 @@ export class HudRenderer {
   render(ctx, sim, dashImg) {
     ctx.save();
 
-    // Always draw race start countdown / status banners regardless of dash mode
     this.drawRaceBanners(ctx, sim);
 
     if (this.mode === 2) {
@@ -25,7 +27,6 @@ export class HudRenderer {
     const p = sim.player;
     const speedMph = Math.round(p.speedMph);
 
-    // Mini mode (F10 once): clean numeric speed at bottom-left like hud.cpp mode 1
     if (this.mode === 1) {
       this.drawBadlocBox(ctx, `${speedMph} MPH`, 18, 436, 180, 36, 28, '#ffffff', 'left');
       this.drawBadlocBox(ctx, `#${sim.playerPlace}/15`, 520, 436, 102, 36, 28, '#ffff00', 'right');
@@ -34,12 +35,12 @@ export class HudRenderer {
     }
 
     const bm = this.assets.bigMeterOpaque || this.assets.bigMeter;
+    const opp = sim.nearestRival;
 
     // 1. Draw the 3 meters BEHIND the dashboard cutouts (hud.cpp lines 284-305)
     if (bm) {
       const stamVal = Math.max(0, Math.min(31, Math.round((p.stamina / p.maxStamina) * 31)));
       const condVal = Math.max(0, Math.min(31, Math.round((p.bikeCond / p.maxBikeCond) * 31)));
-      const opp = sim.nearestRival;
       const oppVal = opp
         ? Math.max(0, Math.min(31, Math.round((opp.stamina / opp.maxStamina) * 31)))
         : 0;
@@ -69,66 +70,62 @@ export class HudRenderer {
       ctx.drawImage(dashImg, 0, 480 - dashImg.height);
     }
 
-    // 3. Draw elliptical perspective gauge needles (Speedo @ 250,449; Tach @ 388,441)
+    // 3. Elliptical perspective gauge needles (Speedo @ 250,449; 6-Speed Tach @ 388,441)
     const speedFrac = Math.max(0, Math.min(1.08, speedMph / 185));
-    const speedAngle = (-2.28 + speedFrac * 4.56); // -130 deg to +130 deg
+    const speedAngle = -2.28 + speedFrac * 4.56;
     this.drawNeedle(ctx, 250, 449, 44, 28, speedAngle);
 
     const rpmFrac = Math.max(0.05, Math.min(1.05, p.rpmNorm));
-    const rpmAngle = (-2.28 + rpmFrac * 4.48);
+    const rpmAngle = -2.28 + rpmFrac * 4.48;
     this.drawNeedle(ctx, 388, 441, 28, 20, rpmAngle);
 
-    // 4. Draw authentic Badloc LCD & name readouts matching hudLayout
-    // Player Name: right-aligned in (0..168, 446)
+    // 4. Authentic Badloc LCD & name readouts matching hudLayout
     this.drawBadlocBox(ctx, sim.config.playerName, 4, 447, 164, 30, 24, '#ffff00', 'right');
-
-    // Race Place: centered in (16..640, 399) -> x = 328
     this.drawBadlocBox(ctx, String(sim.playerPlace), 16, 399, 624, 30, 25, '#ffffff', 'center');
 
-    // Odometer Distance (tenths of a mile, 33 samples = 0.1 mi): right-aligned in (0..345, 452)
+    // Odometer Distance (tenths of a mile: 33 samples = 0.1 mi, matching hud.cpp!)
     const tenths = Math.max(0, Math.floor((p.sample - sim.startSample) / 33));
     const distStr = `${String(Math.floor(tenths / 10)).padStart(2, '0')}.${tenths % 10}`;
     this.drawBadlocBox(ctx, distStr, 0, 452, 345, 28, 22, '#ffffff', 'right');
 
-    // Nearest Opponent Name + Gap + Up/Down Arrow
-    const opp = sim.nearestRival;
+    // Nearest / Focused Opponent Name + Gap + Up/Down Arrow
     if (opp) {
       this.drawBadlocBox(ctx, opp.name, 472, 447, 164, 30, 24, '#ffffff', 'left');
       const dSamples = opp.sample - p.sample;
       const ahead = dSamples >= 0;
-      const gapMiles = Math.min(9.999, (Math.abs(dSamples) * 16) / 5280);
+      const gapMiles = Math.min(9.999, Math.abs(dSamples) / 330);
       const gapStr = gapMiles.toFixed(3);
       const gapColor = ahead ? '#e71000' : '#28a31c';
       this.drawBadlocBox(ctx, gapStr, 436, 394, 196, 28, 22, gapColor, 'left');
       this.drawGapArrow(ctx, 420, ahead ? 401 : 403, ahead);
     }
 
-    // 5. Compact top-left status badges (Weapon equipped, Nitro charges, Miles remaining)
+    // 5. Compact top-left status badges (Miles Left, Gear, Equipped Weapon, Nitro)
     const milesLeft = Math.max(0, (sim.finishSample - p.sample) / 330).toFixed(1);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
-    ctx.fillRect(8, 8, 152, 24);
-    this.drawSmallText(ctx, `TO FINISH: ${milesLeft} MI`, 14, 12, '#defff0');
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.56)';
+    ctx.fillRect(8, 8, 178, 24);
+    this.drawSmallText(ctx, `LEFT: ${milesLeft} MI • GEAR ${p.gear}`, 14, 12, '#defff0');
 
-    let badgeX = 166;
+    let badgeX = 192;
     if (p.weapon > 0) {
-      const wName = p.weapon === 1 ? 'CLUB EQUIPPED' : 'CHAIN EQUIPPED';
-      ctx.fillStyle = 'rgba(180, 60, 15, 0.8)';
-      ctx.fillRect(badgeX, 8, 128, 24);
-      this.drawSmallText(ctx, wName, badgeX + 8, 12, '#ffff60');
-      badgeX += 134;
+      const wName = p.weapon === 1 ? 'CLUB' : 'CHAIN';
+      ctx.fillStyle = 'rgba(185, 62, 16, 0.85)';
+      ctx.fillRect(badgeX, 8, 56, 24);
+      this.drawSmallText(ctx, wName, badgeX + 7, 12, '#ffff60');
+      badgeX += 60;
     }
-    if (p.nitroCharges > 0) {
-      ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.88)' : 'rgba(15, 50, 100, 0.72)';
-      ctx.fillRect(badgeX, 8, 104, 24);
-      this.drawSmallText(ctx, `NITRO: ${p.nitroCharges}`, badgeX + 8, 12, '#99eeff');
+    if (p.nitroCharges > 0 || p.nitroTicks > 0) {
+      ctx.fillStyle = p.nitroTicks > 0 ? 'rgba(30, 160, 255, 0.88)' : 'rgba(15, 50, 100, 0.76)';
+      ctx.fillRect(536, 36, 96, 22);
+      this.drawSmallText(ctx, `NITRO: ${p.nitroCharges}`, 544, 39, '#99eeff');
     }
 
     // Police siren alert pill on top-right when cop is pursuing
-    if (sim.cop && sim.cop.active && sim.cop.chasing) {
+    if (sim.activeCop && sim.activeCop.chasing) {
       const flash = Math.floor(sim.ticks / 6) % 2 === 0;
-      ctx.fillStyle = flash ? 'rgba(200, 20, 20, 0.82)' : 'rgba(20, 70, 210, 0.82)';
-      ctx.fillRect(516, 8, 116, 24);
-      this.drawSmallText(ctx, `COP: ${sim.cop.name.toUpperCase()}`, 524, 12, '#ffffff');
+      ctx.fillStyle = flash ? 'rgba(205, 22, 22, 0.86)' : 'rgba(22, 75, 215, 0.86)';
+      ctx.fillRect(508, 8, 124, 24);
+      this.drawSmallText(ctx, `COP: ${sim.activeCop.name.toUpperCase()}`, 516, 12, '#ffffff');
     }
 
     ctx.restore();
@@ -145,7 +142,7 @@ export class HudRenderer {
     ctx.lineTo(ex + 1, ey + 1);
     ctx.stroke();
 
-    ctx.strokeStyle = '#c81e12';
+    ctx.strokeStyle = '#d42014';
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
@@ -193,7 +190,7 @@ export class HudRenderer {
   }
 
   drawSmallText(ctx, text, x, y, color) {
-    ctx.font = '14px RRFuturaBold, sans-serif';
+    ctx.font = '13px RRFuturaBold, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#000000';
@@ -215,14 +212,12 @@ export class HudRenderer {
       this.drawBadlocBox(ctx, sim.bannerText, 0, 66, 640, 50, 34, sim.bannerColor || '#ffff40', 'center');
     }
 
-    // Running back to bike prompt when player crashed
-    if (sim.player.state === 'running' || sim.player.state === 'getting_up') {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    if (sim.player.state === 'running') {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
       ctx.fillRect(145, 38, 350, 26);
-      this.drawSmallText(ctx, 'SPRINTING BACK TO YOUR DOWNED BIKE!', 172, 43, '#ffff55');
+      this.drawSmallText(ctx, 'SPRINTING BACK TO YOUR DOWNED BIKE!', 175, 44, '#ffff55');
     }
 
-    // Pause Menu Overlay
     if (sim.paused) {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.66)';
       ctx.fillRect(0, 0, 640, 480);

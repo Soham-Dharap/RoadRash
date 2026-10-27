@@ -1,4 +1,7 @@
-// Authentic 1996 Road Rash 640x480 Frontend UI (matching frontend.cpp::draw_scale1)
+// Authentic 1996 Road Rash 640x480 Frontend UI
+// Uses exact FRONTEND.RSC bottom-bar coordinates (y = 402..480 / 420..480) from frontend.json
+// so all 1996 .RRI photography, showroom bikes, postcards & caricatures stay 100% unobstructed!
+
 import { MUSIC_TRACKS } from './audioEngine.js';
 
 const SAVE_STORAGE_KEY = 'roadrash_96_biggame_v2';
@@ -22,21 +25,20 @@ export const CHAR_DEFS = [
   { id: 7, slug: 'mike', nameSlot: 39, bioSlot: 47, startBike: 2, cashIdx: 8, female: false, statsIdx: 7 }
 ];
 
-// Showroom slots 0..14 -> internal bikeId + UI image paths
 export const SHOWROOM_BIKES = [
-  // Rat Bikes (showroom 0)
+  // Rat Bikes (Screen 21 order in FRONTEND.RSC: Banzai, Kamikaze, Killer Rat / Corsair, Perro)
   { slot: 0, bikeId: 0, cls: 'rat', slug: 'banzai', nameSlot: 128, shortSlot: 96, subSlot: 112, descSlot: 144 },
   { slot: 1, bikeId: 1, cls: 'rat', slug: 'corsair', nameSlot: 129, shortSlot: 97, subSlot: 113, descSlot: 145 },
   { slot: 2, bikeId: 2, cls: 'rat', slug: 'kamikaze', nameSlot: 130, shortSlot: 98, subSlot: 114, descSlot: 146 },
   { slot: 3, bikeId: 4, cls: 'rat', slug: 'perro', nameSlot: 131, shortSlot: 99, subSlot: 115, descSlot: 147 },
   { slot: 4, bikeId: 3, cls: 'rat', slug: 'killer', nameSlot: 132, shortSlot: 100, subSlot: 116, descSlot: 148 },
-  // Sport Bikes (showroom 1)
+  // Sport Bikes (Screen 22)
   { slot: 5, bikeId: 10, cls: 'sport', slug: 'diablo', nameSlot: 133, shortSlot: 101, subSlot: 117, descSlot: 149 },
   { slot: 6, bikeId: 12, cls: 'sport', slug: 'kamikaze', nameSlot: 134, shortSlot: 102, subSlot: 118, descSlot: 150 },
   { slot: 7, bikeId: 14, cls: 'sport', slug: 'stiletto', nameSlot: 135, shortSlot: 103, subSlot: 119, descSlot: 151 },
   { slot: 8, bikeId: 11, cls: 'sport', slug: 'dmg', nameSlot: 136, shortSlot: 104, subSlot: 120, descSlot: 152 },
   { slot: 9, bikeId: 13, cls: 'sport', slug: 'perro', nameSlot: 137, shortSlot: 105, subSlot: 121, descSlot: 153 },
-  // Super Bikes (showroom 2)
+  // Super Bikes (Screen 23)
   { slot: 10, bikeId: 5, cls: 'super', slug: 'banzai', nameSlot: 138, shortSlot: 106, subSlot: 122, descSlot: 154 },
   { slot: 11, bikeId: 7, cls: 'super', slug: 'diablo', nameSlot: 139, shortSlot: 107, subSlot: 123, descSlot: 155 },
   { slot: 12, bikeId: 9, cls: 'super', slug: 'stiletto', nameSlot: 140, shortSlot: 108, subSlot: 124, descSlot: 156 },
@@ -59,14 +61,11 @@ export class FrontendUI {
     this.focus = 0;
     this.mode = 'thrash'; // 'thrash' | 'biggame'
 
-    // Thrash settings
     this.thrashLevel = 0; // 0..4 -> Level 1..5
     this.thrashCourse = 0; // 0..4
 
-    // Big Game persistent state
     this.career = this.loadCareer() || this.createCareer(0);
 
-    // Showroom / Schmooze / Result transient state
     this.showroomClass = 0; // 0=rat, 1=sport, 2=super
     this.inspectSlot = 0;
     this.noticeTitle = '';
@@ -76,6 +75,7 @@ export class FrontendUI {
     this.schmoozeMood = 'f';
     this.schmoozeText = '';
     this.restroomBg = 'restroom/rest1.jpg';
+    this.editingName = false;
     this.lastRaceResult = null;
     this.loadingInfo = null;
 
@@ -84,13 +84,14 @@ export class FrontendUI {
 
   createCareer(charIdx = 0) {
     const ch = CHAR_DEFS[charIdx] || CHAR_DEFS[0];
-    const cashArr = this.assets.frontend?.career?.startCash || [500, 200, 500, 1000, 400, 750, 800, 600, 500];
+    const cashArr =
+      this.assets.frontend?.career?.startCash || [500, 200, 500, 1000, 400, 750, 800, 600, 500];
     const cash = cashArr[ch.cashIdx] ?? 500;
     return {
       active: false,
       charIdx: ch.id,
       playerName: this.assets.str(ch.nameSlot) || 'Axle',
-      level: 0, // 0..4 (Level 1..5)
+      level: 0,
       bikeId: ch.startBike,
       cash,
       qualified: [false, false, false, false, false],
@@ -146,9 +147,10 @@ export class FrontendUI {
   }
 
   go(nextScreen, defaultFocus = 0) {
+    this.editingName = false;
     this.screen = nextScreen;
     this.focus = defaultFocus;
-    if (nextScreen === 'restroom' || nextScreen === 'jukebox') {
+    if (nextScreen === 'restroom') {
       const n = 1 + Math.floor(Math.random() * 6);
       this.restroomBg = `restroom/rest${n}.jpg`;
       this.assets.preloadUI(this.restroomBg);
@@ -182,7 +184,6 @@ export class FrontendUI {
     this.schmoozeMood = moods[Math.floor(Math.random() * moods.length)];
     this.assets.preloadUI(`chars/${ch.slug}-${this.schmoozeMood}.jpg`);
 
-    // Pull authentic 900-series schmooze strings from frontend.json
     const S = this.assets.frontend?.strings || {};
     const quotes = [];
     for (let id = 860; id <= 985; id++) {
@@ -194,7 +195,7 @@ export class FrontendUI {
       "Watch your back out on Pacific Highway — one boot kick near the cliff and it's curtains!";
   }
 
-  // ==================== MENU DEFINITIONS ====================
+  // ==================== EXACT 1996 FRONTEND.RSC SCREEN SPECS ====================
 
   currentMenuSpec() {
     const S = (id) => this.assets.str(id);
@@ -203,16 +204,20 @@ export class FrontendUI {
       return { bg: 'splash.jpg', items: [] };
     }
 
+    // Screen 9: Main Menu (4 horizontal dock buttons across y = 420..480!)
     if (this.screen === 'main') {
       const hasSave = Boolean(this.career?.active);
       return {
         bg: 'main.jpg',
-        titleRect: [20, 15, 294, 156],
-        title: 'Road Rash',
-        descRect: [20, 186, 294, 279],
+        showAuthorBadge: true,
+        titleRect: [14, 14, 306, 78],
+        title: S(70) || 'Game Mode',
+        titleFontSize: 54,
+        descRect: [14, 102, 306, 232],
+        descFontSize: 21,
         items: [
           {
-            rect: [338, 254, 282, 30],
+            rect: [0, 420, 160, 60],
             label: S(2) || 'Thrash Mode',
             desc: S(3),
             action: () => {
@@ -221,31 +226,28 @@ export class FrontendUI {
             }
           },
           {
-            rect: [338, 298, 282, 30],
-            label: hasSave ? `${S(4)} (Lv.${this.career.level + 1})` : S(4) || 'Big Game Mode',
+            rect: [160, 420, 160, 60],
+            label: S(4) || 'Big Game',
             desc: hasSave
-              ? `Continue ${this.career.playerName}'s Big Game career ($${this.career.cash.toLocaleString()}, Level ${this.career.level + 1}) or start fresh from Restroom.`
+              ? `${S(5)}\n\nSaved Career: ${this.career.playerName} • Lv.${this.career.level + 1} • $${this.career.cash.toLocaleString()}`
               : S(5),
             action: () => {
               this.mode = 'biggame';
-              if (this.career.active) {
-                this.go('street', 0);
-              } else {
-                this.go('char_select', 0);
-              }
+              if (this.career.active) this.go('street', 0);
+              else this.go('char_select', 0);
             }
           },
           {
-            rect: [338, 342, 282, 30],
-            label: 'Controls & Combat',
-            desc: 'Master punches, club/chain weapon snatching, lateral boot-kick shoves, pedestrians & downed-bike ramp jumps.',
+            rect: [320, 420, 160, 60],
+            label: 'How To Rash',
+            desc: 'View keyboard controls & OG Road Rash combat mechanics: punches, timed weapon snatching, lateral boot-kick shoves, pedestrians & downed-bike ramps.',
             action: () => {
               this.returnScreen = 'main';
               this.go('help', 0);
             }
           },
           {
-            rect: [338, 386, 282, 30],
+            rect: [480, 420, 160, 60],
             label: S(6) || 'Restroom',
             desc: S(7),
             action: () => {
@@ -260,20 +262,23 @@ export class FrontendUI {
     if (this.screen === 'help') {
       return {
         bg: 'main.jpg',
-        titleRect: [20, 15, 600, 76],
-        title: 'Road Rash Rules',
+        titleRect: [16, 12, 608, 68],
+        title: 'Controls & Combat',
+        titleFontSize: 48,
         customBody: [
-          'STEERING & THROTTLE: Arrow Keys or W/A/S/D. Hold UP/W for gas, DOWN/S for brakes.',
-          'MELEE COMBAT (Z = Left, C = Right): Punch & backhand rivals to drain their stamina meter!',
-          'WEAPON SNATCHING: Time a punch right as a club- or chain-wielding biker winds up to steal their weapon!',
-          'BOOT KICK SHOVE (X): Physically shoves rival bikes sideways across lanes into oncoming cars, buildings & signs!',
-          'PEDESTRIANS & FALLEN RIDERS: Clip jaywalkers or crashed bikers sprinting back to their bikes!',
-          'DOWNED-BIKE RAMPS: Crashed motorcycles on the road act as physical ramps — hit straight to launch airborne!',
-          'SUPERBIKE NITRO: Press SPACE (or N) on Nitro-equipped bikes for an explosive burst of top speed!'
+          'RIDE & STEER: Arrow Keys or W/A/S/D  •  UP/W = Throttle, DOWN/S = Brakes, LEFT/RIGHT = Lean.',
+          'SMART MELEE (SPACE or ENTER): Swings Fist, Club, or Chain toward the nearest rival beside you!',
+          'DIRECTIONAL SWINGS (Z = Left, C = Right): Aim punches, clubs & chains explicitly left or right.',
+          'WEAPON SNATCHING: Land a bare-knuckle punch right while an armed rival winds up to steal their Club or Chain!',
+          'BOOT KICK SHOVE (X or SHIFT): Physically shoves rival bikes sideways across lanes into oncoming cars & walls!',
+          'PEDESTRIANS & FALLEN RIDERS: Clip jaywalkers or crashed bikers sprinting on foot back to their bikes!',
+          'DOWNED-BIKE RAMPS: Crashed motorcycles on the road act as stunt ramps — hit straight to launch airborne!',
+          'SUPERBIKE NITRO (N or CTRL): Fires Nitro boost on Nitro-equipped bikes!  •  F10 = Toggle Cockpit HUD.'
         ],
         items: [
           {
-            rect: [200, 424, 240, 32],
+            rect: [0, 430, 640, 50],
+            centered: true,
             label: S(86) || 'Done',
             desc: '',
             action: () => this.go(this.returnScreen || 'main', 0)
@@ -282,13 +287,16 @@ export class FrontendUI {
       };
     }
 
+    // Screen 14: Character Select (3x3 bottom dock y = 402..480, character portrait 100% uncovered!)
     if (this.screen === 'char_select') {
-      const ch = CHAR_DEFS[this.focus] || CHAR_DEFS[0];
+      const charIdx = this.focus < 8 ? this.focus : 0;
+      const ch = CHAR_DEFS[charIdx] || CHAR_DEFS[0];
       const st = this.assets.frontend?.riderStats?.[ch.statsIdx] || { height: 72, weight: 175 };
       const ft = Math.floor(st.height / 12);
       const inch = st.height % 12;
       const bikeName = S(bikeDefById(ch.startBike).nameSlot);
-      const cashArr = this.assets.frontend?.career?.startCash || [500, 200, 500, 1000, 400, 750, 800, 600, 500];
+      const cashArr =
+        this.assets.frontend?.career?.startCash || [500, 200, 500, 1000, 400, 750, 800, 600, 500];
       const cash = cashArr[ch.cashIdx] ?? 500;
       const rawBio = S(ch.bioSlot)
         .replace('%s', `${ft}'${inch}"`)
@@ -296,47 +304,69 @@ export class FrontendUI {
         .replace('%s', bikeName)
         .replace('%d', String(cash));
 
+      const charRects = [
+        [0, 402, 213, 26],
+        [0, 428, 213, 26],
+        [0, 454, 213, 26],
+        [213, 402, 213, 26],
+        [213, 428, 213, 26],
+        [213, 454, 213, 26],
+        [426, 402, 214, 26],
+        [426, 428, 214, 26]
+      ];
+
       return {
         bg: `chars/${ch.slug}-n.jpg`,
-        titleRect: [20, 15, 344, 78],
-        title: S(78) || 'Select Character',
-        descRect: [20, 108, 344, 357],
-        descFontSize: 22,
-        items: CHAR_DEFS.map((c) => ({
-          rect: [380, 108 + c.id * 45, 240, 30],
-          label: S(c.nameSlot),
-          desc: rawBio,
-          action: () => {
-            this.career = this.createCareer(c.id);
-            this.saveCareer();
-            this.go('street', 0);
+        titleRect: [14, 12, 276, 58],
+        title: S(ch.nameSlot),
+        titleFontSize: 42,
+        descRect: [14, 78, 276, 312],
+        descFontSize: 19,
+        items: [
+          ...CHAR_DEFS.map((c, idx) => ({
+            rect: charRects[idx],
+            label: S(c.nameSlot),
+            desc: rawBio,
+            action: () => {
+              this.career = this.createCareer(c.id);
+              this.saveCareer();
+              this.go('street', 0);
+            }
+          })),
+          {
+            rect: [426, 454, 214, 26],
+            label: S(204) || 'Cancel',
+            desc: 'Return to Main Menu.',
+            action: () => this.go('main', 1)
           }
-        }))
+        ]
       };
     }
 
+    // Screen 15: The Street (3 horizontal buttons across y = 420..480, neon street 100% uncovered!)
     if (this.screen === 'street') {
       const overlays = ['street/klub.jpg', 'street/olley.jpg', 'street/home.jpg'];
       return {
         bg: 'street.jpg',
         overlay: { path: overlays[this.focus] || overlays[0], x: 146, y: 230 },
-        statusBanner: `${this.career.playerName}  •  Level ${this.career.level + 1}  •  $${this.career.cash.toLocaleString()}  •  ${S(bikeDefById(this.career.bikeId).nameSlot)}`,
-        descRect: [20, 48, 360, 172],
+        statusBanner: `${this.career.playerName}  •  Lv.${this.career.level + 1}  •  $${this.career.cash.toLocaleString()}  •  ${S(bikeDefById(this.career.bikeId).nameSlot)}`,
+        descRect: [16, 46, 286, 118],
+        descFontSize: 20,
         items: [
           {
-            rect: [400, 48, 220, 30],
+            rect: [0, 420, 213, 60],
             label: S(48) || 'Der Panzer Klub',
             desc: S(49),
             action: () => this.go('panzer', 2)
           },
           {
-            rect: [400, 92, 220, 30],
-            label: S(50) || "Olley's Skoot-A-Rama",
+            rect: [213, 420, 213, 60],
+            label: S(50) || "Olley's Skoot",
             desc: S(51),
             action: () => this.go('olleys', 0)
           },
           {
-            rect: [400, 136, 220, 30],
+            rect: [426, 420, 214, 60],
             label: S(8) || 'Go Home',
             desc: S(9),
             action: () => {
@@ -348,15 +378,22 @@ export class FrontendUI {
       };
     }
 
+    // Screen 25: Der Panzer Klub (exact 2x2 bottom dock y = 420..480 + side caps!)
     if (this.screen === 'panzer') {
+      const qualCount = this.career.qualified.filter(Boolean).length;
       return {
         bg: 'panzer.jpg',
-        titleRect: [20, 15, 344, 78],
-        title: S(48) || 'Der Panzer Klub',
-        descRect: [20, 110, 344, 345],
+        statusBanner: `${this.career.playerName}  •  Level ${this.career.level + 1} (${qualCount}/5 Qualified)  •  Cash: $${this.career.cash.toLocaleString()}`,
+        descRect: [16, 48, 280, 136],
+        descFontSize: 20,
+        extraDarkRects: [
+          [0, 420, 80, 60],
+          [280, 420, 80, 60],
+          [560, 420, 80, 60]
+        ],
         items: [
           {
-            rect: [390, 254, 230, 30],
+            rect: [80, 420, 200, 30],
             label: S(52) || 'Schmooze',
             desc: S(53),
             action: () => {
@@ -365,7 +402,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [390, 298, 230, 30],
+            rect: [360, 420, 200, 30],
             label: S(6) || 'Restroom',
             desc: S(7),
             action: () => {
@@ -374,7 +411,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [390, 342, 230, 30],
+            rect: [80, 450, 200, 30],
             label: S(54) || 'Bulletin Board',
             desc: S(55),
             action: () => {
@@ -383,7 +420,7 @@ export class FrontendUI {
             }
           },
           {
-            rect: [390, 386, 230, 30],
+            rect: [360, 450, 200, 30],
             label: S(56) || 'The Street',
             desc: S(57),
             action: () => this.go('street', 0)
@@ -392,24 +429,26 @@ export class FrontendUI {
       };
     }
 
+    // Screen 26: Schmooze (character portrait uncovered, quote in bottom 640x96 dock!)
     if (this.screen === 'schmooze') {
       const ch = CHAR_DEFS[this.schmoozeChar] || CHAR_DEFS[0];
       return {
         bg: `chars/${ch.slug}-${this.schmoozeMood}.jpg`,
-        titleRect: [20, 15, 360, 72],
+        titleRect: [14, 12, 270, 56],
         title: S(ch.nameSlot),
-        descRect: [20, 290, 600, 118],
-        descFontSize: 26,
+        titleFontSize: 40,
+        descRect: [12, 344, 616, 72],
+        descFontSize: 21,
         items: [
           {
-            rect: [180, 424, 130, 30],
-            label: 'Talk Again',
+            rect: [0, 420, 320, 60],
+            label: 'Schmooze Again',
             desc: `“${this.schmoozeText}”`,
             action: () => this.pickSchmooze()
           },
           {
-            rect: [330, 424, 130, 30],
-            label: S(86) || 'Done',
+            rect: [320, 420, 320, 60],
+            label: S(48) || 'Back to Klub',
             desc: `“${this.schmoozeText}”`,
             action: () => this.go('panzer', 0)
           }
@@ -417,17 +456,23 @@ export class FrontendUI {
       };
     }
 
+    // Screen 20: Olley's Entrance (exact 2x2 bottom dock y = 420..480!)
     if (this.screen === 'olleys') {
       return {
         bg: 'olleys.jpg',
-        titleRect: [20, 15, 344, 78],
-        title: S(90) || 'Showroom',
-        descRect: [20, 108, 344, 345],
+        statusBanner: `Cash: $${this.career.cash.toLocaleString()}  •  Trade-In: +$${this.tradeInValue().toLocaleString()}  •  Current: ${S(bikeDefById(this.career.bikeId).nameSlot)}`,
+        descRect: [16, 48, 290, 148],
+        descFontSize: 19,
+        extraDarkRects: [
+          [0, 420, 80, 60],
+          [280, 420, 80, 60],
+          [560, 420, 80, 60]
+        ],
         items: [
           {
-            rect: [390, 260, 230, 30],
+            rect: [80, 420, 200, 30],
             label: S(58) || 'Rat Bikes',
-            desc: `${S(59)}\n\nCash: $${this.career.cash.toLocaleString()}  •  Trade-in: +$${this.tradeInValue().toLocaleString()}`,
+            desc: S(59),
             action: () => {
               this.showroomClass = 0;
               this.preloadShowroom(0);
@@ -435,19 +480,9 @@ export class FrontendUI {
             }
           },
           {
-            rect: [390, 304, 230, 30],
-            label: S(60) || 'Sport Bikes',
-            desc: `${S(61)}\n\nCash: $${this.career.cash.toLocaleString()}  •  Trade-in: +$${this.tradeInValue().toLocaleString()}`,
-            action: () => {
-              this.showroomClass = 1;
-              this.preloadShowroom(1);
-              this.go('showroom', 0);
-            }
-          },
-          {
-            rect: [390, 348, 230, 30],
+            rect: [360, 420, 200, 30],
             label: S(62) || 'Super Bikes',
-            desc: `${S(63)}\n\nCash: $${this.career.cash.toLocaleString()}  •  Trade-in: +$${this.tradeInValue().toLocaleString()}`,
+            desc: S(63),
             action: () => {
               this.showroomClass = 2;
               this.preloadShowroom(2);
@@ -455,7 +490,17 @@ export class FrontendUI {
             }
           },
           {
-            rect: [390, 392, 230, 30],
+            rect: [80, 450, 200, 30],
+            label: S(60) || 'Sport Bikes',
+            desc: S(61),
+            action: () => {
+              this.showroomClass = 1;
+              this.preloadShowroom(1);
+              this.go('showroom', 0);
+            }
+          },
+          {
+            rect: [360, 450, 200, 30],
             label: S(56) || 'The Street',
             desc: S(57),
             action: () => this.go('street', 1)
@@ -464,6 +509,7 @@ export class FrontendUI {
       };
     }
 
+    // Screens 21-23: Rat / Sport / Super Showroom (exact 3x2 bottom dock y = 420..480, bikes 100% uncovered!)
     if (this.screen === 'showroom') {
       const clsNames = ['rat', 'sport', 'super'];
       const clsKey = clsNames[this.showroomClass] || 'rat';
@@ -474,61 +520,73 @@ export class FrontendUI {
         ? `showroom/${clsKey}/${focusedBike.slug}.jpg`
         : `showroom/${clsKey}/bikes.jpg`;
 
-      const ownedDef = bikeDefById(this.career.bikeId);
+      const showroomRects = [
+        [0, 420, 213, 30],
+        [0, 450, 213, 30],
+        [213, 420, 213, 30],
+        [213, 450, 213, 30],
+        [426, 420, 214, 30]
+      ];
       const buyingPower = this.career.cash + this.tradeInValue();
+      const priceStr = focusedBike
+        ? `${S(focusedBike.nameSlot)} — $${this.bikePrice(focusedBike.bikeId).toLocaleString()}${focusedBike.bikeId === this.career.bikeId ? ' (OWNED)' : ''}`
+        : 'Select a motorcycle to inspect full specs & buy';
 
       return {
         bg,
-        statusBanner: `Cash: $${this.career.cash.toLocaleString()}  •  Trade: $${this.tradeInValue().toLocaleString()}  •  Bike: ${S(ownedDef.nameSlot)}`,
-        descRect: [20, 336, 370, 124],
-        descFontSize: 20,
+        statusBanner: `${priceStr}  •  Cash+Trade: $${buyingPower.toLocaleString()}`,
         items: [
-          ...bikes.map((b) => {
-            const price = this.bikePrice(b.bikeId);
-            const tag = b.bikeId === this.career.bikeId ? ' [OWNED]' : '';
-            return {
-              rect: [404, 210 + (b.slot - baseSlot) * 40, 220, 30],
-              label: `${S(b.shortSlot)} ${S(b.subSlot)}${tag}`,
-              desc: `${S(b.nameSlot)}\nPrice: $${price.toLocaleString()} (Buying Power: $${buyingPower.toLocaleString()})`,
-              action: () => {
-                this.inspectSlot = b.slot;
-                this.assets.preloadUI(`bikes/${b.cls}/${b.slug}.jpg`);
-                this.go('bike_inspect', 0);
-              }
-            };
-          }),
+          ...bikes.map((b, idx) => ({
+            rect: showroomRects[idx],
+            label: `${S(b.shortSlot)} ${S(b.subSlot)}${b.bikeId === this.career.bikeId ? ' ★' : ''}`,
+            desc: '',
+            action: () => {
+              this.inspectSlot = b.slot;
+              this.assets.preloadUI(`bikes/${b.cls}/${b.slug}.jpg`);
+              this.go('bike_inspect', 0);
+            }
+          })),
           {
-            rect: [404, 418, 220, 30],
-            label: S(218) || 'Exit',
-            desc: 'Return to Olley’s showroom entrance.',
-            action: () => this.go('olleys', this.showroomClass)
+            rect: [426, 450, 214, 30],
+            label: S(90) || 'Showroom',
+            desc: '',
+            action: () => this.go('olleys', 0)
           }
         ]
       };
     }
 
+    // Screen 24: Bike Close-Up Inspect & Buy
     if (this.screen === 'bike_inspect') {
       const b = SHOWROOM_BIKES[this.inspectSlot] || SHOWROOM_BIKES[0];
       const price = this.bikePrice(b.bikeId);
-      const netCost = price - this.tradeInValue();
+      const netCost = Math.max(0, price - this.tradeInValue());
+      const raw = this.assets.frontend?.bikes?.[b.bikeId];
+      const hasNitro = raw && raw[86] > 0;
+
       return {
         bg: `bikes/${b.cls}/${b.slug}.jpg`,
-        titleRect: [20, 15, 600, 66],
-        title: S(b.nameSlot),
-        titleFontSize: 44,
-        descRect: [20, 294, 430, 166],
-        descFontSize: 20,
+        statusBanner: `${S(b.nameSlot)}${hasNitro ? ' [NITRO]' : ''}  •  Price: $${price.toLocaleString()}  •  Net w/ Trade: $${netCost.toLocaleString()}`,
+        descRect: [16, 336, 608, 76],
+        descFontSize: 18,
+        extraDarkRects: [
+          [0, 420, 80, 60],
+          [80, 420, 200, 30],
+          [280, 420, 80, 60],
+          [360, 420, 200, 30],
+          [560, 420, 80, 60]
+        ],
         items: [
           {
-            rect: [468, 364, 152, 32],
-            label: S(217) || 'Buy',
-            desc: `${S(b.descSlot)}\nPrice: $${price.toLocaleString()}  •  Net w/ Trade: $${Math.max(0, netCost).toLocaleString()}`,
+            rect: [80, 450, 200, 30],
+            label: `${S(217) || 'Buy'} ($${netCost.toLocaleString()})`,
+            desc: S(b.descSlot),
             action: () => this.tryBuyBike(b)
           },
           {
-            rect: [468, 412, 152, 32],
+            rect: [360, 450, 200, 30],
             label: S(218) || 'Exit',
-            desc: `${S(b.descSlot)}\nPrice: $${price.toLocaleString()}  •  Cash: $${this.career.cash.toLocaleString()}`,
+            desc: S(b.descSlot),
             action: () => this.go('showroom', this.inspectSlot % 5)
           }
         ]
@@ -538,12 +596,13 @@ export class FrontendUI {
     if (this.screen === 'notice') {
       return {
         bg: 'olleys.jpg',
-        titleRect: [40, 80, 560, 82],
+        titleRect: [40, 96, 560, 74],
         title: this.noticeTitle,
-        descRect: [40, 184, 560, 160],
+        descRect: [40, 184, 560, 150],
         items: [
           {
-            rect: [220, 378, 200, 34],
+            rect: [0, 420, 640, 60],
+            centered: true,
             label: S(205) || 'OK',
             desc: this.noticeBody,
             action: () => this.go(this.noticeNext, 0)
@@ -552,6 +611,7 @@ export class FrontendUI {
       };
     }
 
+    // Screens 10 & 27: Postcard Track Select (exact 3x2 bottom dock y = 420..480, right postcard 100% uncovered!)
     if (this.screen === 'thrash_tracks' || this.screen === 'biggame_tracks') {
       const isBig = this.screen === 'biggame_tracks';
       const level = isBig ? this.career.level : this.thrashLevel;
@@ -563,20 +623,28 @@ export class FrontendUI {
         rightPost = `postcard/${qual ? focusedCourse.qpost : focusedCourse.post}.jpg`;
       }
 
+      const trackRects = [
+        [0, 420, 213, 30],
+        [0, 450, 213, 30],
+        [213, 420, 213, 30],
+        [213, 450, 213, 30],
+        [426, 420, 214, 30]
+      ];
+
       return {
         bg: 'postcard.jpg',
         overlay: { path: rightPost, x: 243, y: 0 },
-        descRect: [20, 18, 212, 212],
+        descRect: [14, 16, 216, 388],
         descFontSize: 20,
         items: [
-          ...COURSE_DEFS.map((c) => {
+          ...COURSE_DEFS.map((c, idx) => {
             const qual = isBig && this.career.qualified[c.id];
             const miles = this.courseMiles(level, c.id);
-            const rawDesc = S(c.descSlot).replace(/\n+/g, '\n');
+            const rawDesc = S(c.descSlot).split('Length')[0].replace(/\n+/g, ' ').trim();
             return {
-              rect: [14, 244 + c.id * 36, 220, 28],
+              rect: trackRects[idx],
               label: `${S(c.nameSlot)}${qual ? ' ★' : ''}`,
-              desc: `Level ${level + 1} • ${miles} ${S(27)}\n${rawDesc.split('Length')[0].trim()}`,
+              desc: `${S(c.nameSlot)}\nLevel ${level + 1}${qual ? ' (QUALIFIED)' : ''}\n\n${rawDesc}\n\nLength: ${miles} ${S(27)}`,
               action: () => {
                 if (!isBig) this.thrashCourse = c.id;
                 this.launchRace(c.id);
@@ -584,9 +652,11 @@ export class FrontendUI {
             };
           }),
           {
-            rect: [14, 430, 220, 30],
-            label: isBig ? S(48) || 'Der Panzer Klub' : S(6) || 'Restroom / Back',
-            desc: isBig ? 'Return to Der Panzer Klub.' : 'Change Thrash Level or return to Main Menu.',
+            rect: [426, 450, 214, 30],
+            label: isBig ? S(48) || 'Der Panzer Klub' : S(86) || 'Main Menu',
+            desc: isBig
+              ? 'Return to Der Panzer Klub.'
+              : `Thrash Level ${level + 1}.\nReturn to Main Menu or visit Restroom to change Thrash Level.`,
             action: () => {
               if (isBig) this.go('panzer', 2);
               else this.go('main', 0);
@@ -596,50 +666,69 @@ export class FrontendUI {
       };
     }
 
+    // Screen 16: Restroom (full-width centered rows like draw_scale1 w == 0!)
     if (this.screen === 'restroom') {
       const trackName = MUSIC_TRACKS[this.audio.currentTrackIndex] || 'GRUNGE1';
+      const alias = this.career.playerName || 'Axle';
       return {
         bg: this.restroomBg,
-        titleRect: [20, 15, 344, 78],
+        titleRect: [0, 14, 640, 68],
         title: S(6) || 'Restroom',
-        descRect: [20, 108, 344, 345],
+        titleFontSize: 54,
         items: [
           {
-            rect: [376, 150, 248, 30],
-            label: `Thrash Level: ${this.thrashLevel + 1}`,
-            desc: S(75),
+            rect: [0, 106, 640, 34],
+            centered: true,
+            label: `Thrash Level: Level ${this.thrashLevel + 1}`,
+            desc: '',
             action: () => {
               this.thrashLevel = (this.thrashLevel + 1) % 5;
             }
           },
           {
-            rect: [376, 194, 248, 30],
-            label: `Jukebox: ${trackName}`,
-            desc: S(81),
+            rect: [0, 148, 640, 34],
+            centered: true,
+            label: this.editingName
+              ? `Player Name: ${alias}_  (Type & Enter)`
+              : `Player Name: ${alias}  (Click to Edit)`,
+            desc: '',
+            action: () => {
+              this.editingName = !this.editingName;
+              if (!this.editingName) this.saveCareer();
+            }
+          },
+          {
+            rect: [0, 190, 640, 34],
+            centered: true,
+            label: `Jukebox Track: ${trackName}`,
+            desc: '',
             action: () => {
               this.audio.nextMusicTrack();
             }
           },
           {
-            rect: [376, 238, 248, 30],
-            label: `Music: ${this.audio.musicEnabled ? 'ON' : 'OFF'}`,
-            desc: 'Toggle 1996 SoundFont Grunge Rock soundtrack.',
+            rect: [0, 232, 640, 34],
+            centered: true,
+            label: `Rock Music: ${this.audio.musicEnabled ? 'ON' : 'OFF'}`,
+            desc: '',
             action: () => {
               this.audio.toggleMusic();
             }
           },
           {
-            rect: [376, 282, 248, 30],
-            label: `SFX: ${this.audio.sfxEnabled ? 'ON' : 'OFF'}`,
-            desc: 'Toggle motorcycle engines, sirens, crashes & voices.',
+            rect: [0, 274, 640, 34],
+            centered: true,
+            label: `Sound Effects: ${this.audio.sfxEnabled ? 'ON' : 'OFF'}`,
+            desc: '',
             action: () => {
               this.audio.toggleSfx();
             }
           },
           {
-            rect: [376, 326, 248, 30],
-            label: 'New Big Game Career',
-            desc: 'Start a fresh Big Game career with a new character.',
+            rect: [0, 316, 640, 34],
+            centered: true,
+            label: 'Start New Big Game Career',
+            desc: '',
             action: () => {
               this.resetCareer();
               this.mode = 'biggame';
@@ -647,47 +736,53 @@ export class FrontendUI {
             }
           },
           {
-            rect: [376, 370, 248, 30],
-            label: 'Controls & Rules',
-            desc: 'View keyboard controls and OG Road Rash combat mechanics.',
+            rect: [0, 358, 640, 34],
+            centered: true,
+            label: 'Controls & Combat Guide',
+            desc: '',
             action: () => {
               this.go('help', 0);
             }
           },
           {
-            rect: [376, 414, 248, 30],
+            rect: [0, 420, 640, 60],
+            centered: true,
             label: S(86) || 'Done',
-            desc: S(87),
+            desc: '',
             action: () => this.go(this.returnScreen || 'main', 0)
           }
         ]
       };
     }
 
+    // Screen 8: Pre-Race Loading
     if (this.screen === 'loading') {
       const ch = CHAR_DEFS[this.mode === 'biggame' ? this.career.charIdx : 0] || CHAR_DEFS[0];
       return {
         bg: `chars/${ch.slug}-f.jpg`,
-        titleRect: [40, 150, 560, 86],
+        titleRect: [80, 168, 480, 76],
         title: S(206) || 'GAME LOADING',
-        descRect: [120, 256, 400, 90],
+        descRect: [120, 256, 400, 76],
         items: [],
         fixedDesc: `${this.loadingInfo?.courseName || ''}\n${S(207) || 'Get ready to race!'}`
       };
     }
 
+    // Screens 28-32: Post-Race Caricature (full-width bottom bar [0, 410, 640, 70], caricature 100% uncovered!)
     if (this.screen === 'post_race') {
       const r = this.lastRaceResult || {};
       return {
         bg: r.art || 'results/win1.jpg',
-        titleRect: [20, 14, 600, 74],
+        titleRect: [16, 10, 608, 64],
         title: r.headline || 'WINNER!',
-        descRect: [20, 326, 420, 134],
-        descFontSize: 22,
+        titleFontSize: 48,
+        descRect: [0, 348, 640, 62],
+        descFontSize: 20,
         items: [
           {
-            rect: [456, 396, 164, 36],
-            label: 'Standings',
+            rect: [0, 410, 640, 70],
+            centered: true,
+            label: 'View Race Standings  ▶',
             desc: r.message || '',
             action: () => this.go('standings', 0)
           }
@@ -695,18 +790,20 @@ export class FrontendUI {
       };
     }
 
+    // Screen 34: 15-Rider Race Results Standings
     if (this.screen === 'standings') {
       const r = this.lastRaceResult || {};
       return {
         bg: r.art || 'results/win1.jpg',
-        titleRect: [20, 10, 600, 62],
+        titleRect: [16, 8, 608, 56],
         title: S(183) || 'Race Results',
-        titleFontSize: 48,
+        titleFontSize: 44,
         standings: r.standings || [],
         items: [
           {
-            rect: [210, 434, 220, 32],
-            label: 'Continue',
+            rect: [0, 430, 640, 50],
+            centered: true,
+            label: 'Continue  ▶',
             desc: '',
             action: () => {
               if (this.mode === 'biggame') {
@@ -748,7 +845,7 @@ export class FrontendUI {
       return;
     }
     const price = this.bikePrice(b.bikeId);
-    const netCost = price - this.tradeInValue();
+    const netCost = Math.max(0, price - this.tradeInValue());
     if (this.career.cash < netCost) {
       this.noticeTitle = S(185) || 'IN YOUR DREAMS!';
       this.noticeBody = `${S(186)}\nNeed $${netCost.toLocaleString()} after trade-in (you have $${this.career.cash.toLocaleString()}).`;
@@ -772,10 +869,9 @@ export class FrontendUI {
     const level = isBig ? this.career.level : this.thrashLevel;
     const ch = CHAR_DEFS[isBig ? this.career.charIdx : 0] || CHAR_DEFS[0];
 
-    // Thrash bike picks from career.levelBike table just like 1996 Road Rash
     const lvlBikes = [1, 0, 12, 6, 9];
     const bikeId = isBig ? this.career.bikeId : lvlBikes[level] ?? 1;
-    const playerName = isBig ? this.career.playerName : this.assets.str(ch.nameSlot) || 'Axle';
+    const playerName = isBig ? this.career.playerName : this.career.playerName || this.assets.str(ch.nameSlot) || 'Axle';
 
     this.loadingInfo = {
       courseName: `${this.assets.str(cdef.nameSlot)} — Level ${level + 1}`
@@ -794,11 +890,10 @@ export class FrontendUI {
         female: ch.female,
         charIdx: ch.id
       });
-    }, 120);
+    }, 100);
   }
 
   handleRaceFinished(outcome) {
-    // outcome: { status: 'finished'|'wrecked'|'busted', place, courseId, standings }
     const S = (id) => this.assets.str(id);
     const pick6 = (prefix) => {
       const p = `results/${prefix}${1 + Math.floor(Math.random() * 6)}.jpg`;
@@ -808,7 +903,8 @@ export class FrontendUI {
 
     const isBig = this.mode === 'biggame';
     const level = isBig ? this.career.level : this.thrashLevel;
-    const prizes = this.assets.frontend?.career?.prize || [1000, 750, 500, 400, 300, 250, 200, 160, 130, 100, 70, 50, 30, 20, 10];
+    const prizes =
+      this.assets.frontend?.career?.prize || [1000, 750, 500, 400, 300, 250, 200, 160, 130, 100, 70, 50, 30, 20, 10];
     const levelMult = [1, 2, 4, 8, 15][level] || 1;
 
     let art = 'results/win1.jpg';
@@ -823,11 +919,11 @@ export class FrontendUI {
       if (isBig) {
         if (this.career.cash < repair) {
           headline = S(182) || 'TOTALLED!';
-          message = `${S(198)}\nRepair bill was $${repair.toLocaleString()}.`;
+          message = `${S(198)}  (Repair bill: $${repair.toLocaleString()})`;
           gameOver = true;
         } else {
           this.career.cash -= repair;
-          message = `${S(192)}\nRepair Bill: $${repair.toLocaleString()} • Cash Left: $${this.career.cash.toLocaleString()}`;
+          message = `${S(192)}  Repair Bill: $${repair.toLocaleString()} • Cash: $${this.career.cash.toLocaleString()}`;
           this.saveCareer();
         }
       } else {
@@ -839,18 +935,17 @@ export class FrontendUI {
       const fine = 150 * levelMult;
       if (isBig) {
         if (this.career.cash < fine) {
-          message = `${S(198)}\nPolice fine was $${fine.toLocaleString()}.`;
+          message = `${S(198)}  (Police fine: $${fine.toLocaleString()})`;
           gameOver = true;
         } else {
           this.career.cash -= fine;
-          message = `${S(195)}\nPolice Fine: $${fine.toLocaleString()} • Cash Left: $${this.career.cash.toLocaleString()}`;
+          message = `${S(195)}  Fine: $${fine.toLocaleString()} • Cash: $${this.career.cash.toLocaleString()}`;
           this.saveCareer();
         }
       } else {
         message = S(195);
       }
     } else {
-      // Finished race!
       const place = outcome.place || 1;
       const purse = (prizes[Math.max(0, Math.min(14, place - 1))] || 10) * levelMult;
       if (place <= 3) {
@@ -862,7 +957,7 @@ export class FrontendUI {
             : place === 2
               ? S(202).replace('%s', outcome.playerName)
               : S(203).replace('%s', outcome.playerName);
-        message = `${placeStr}\nPrize Purse: +$${purse.toLocaleString()}`;
+        message = `${placeStr}   Prize Purse: +$${purse.toLocaleString()}`;
 
         if (isBig) {
           this.career.cash += purse;
@@ -907,7 +1002,43 @@ export class FrontendUI {
     this.go('post_race', 0);
   }
 
-  // ==================== INPUT HANDLING ====================
+  // ==================== 2D GRID NAVIGATION & INPUT ====================
+
+  moveFocusDirectional(dx, dy, items) {
+    if (!items.length) return;
+    const cur = items[this.focus]?.rect;
+    if (!cur) {
+      this.focus = 0;
+      return;
+    }
+    const cx = cur[0] + cur[2] * 0.5;
+    const cy = cur[1] + cur[3] * 0.5;
+
+    let bestIdx = -1;
+    let bestScore = Infinity;
+    for (let i = 0; i < items.length; i++) {
+      if (i === this.focus) continue;
+      const r = items[i].rect;
+      const ox = r[0] + r[2] * 0.5 - cx;
+      const oy = r[1] + r[3] * 0.5 - cy;
+      const dot = ox * dx + oy * dy;
+      if (dot <= 8) continue;
+      const perp = Math.abs(ox * dy - oy * dx);
+      const score = dot + perp * 2.4;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= 0) {
+      this.focus = bestIdx;
+    } else {
+      // Fallback wrap
+      const step = dx > 0 || dy > 0 ? 1 : -1;
+      this.focus = (this.focus + step + items.length) % items.length;
+    }
+  }
 
   onKeyDown(e) {
     this.audio.ensureContext();
@@ -919,26 +1050,49 @@ export class FrontendUI {
       return;
     }
 
-    const spec = this.currentMenuSpec();
-    const count = spec.items?.length || 0;
-    if (!count) return;
+    // Live Player Name typing inside Restroom
+    if (this.editingName) {
+      if (e.code === 'Enter' || e.code === 'Escape') {
+        this.editingName = false;
+        if (!this.career.playerName.trim()) this.career.playerName = 'Axle';
+        this.saveCareer();
+      } else if (e.code === 'Backspace') {
+        this.career.playerName = this.career.playerName.slice(0, -1);
+      } else if (e.key && e.key.length === 1 && this.career.playerName.length < 12) {
+        this.career.playerName += e.key;
+      }
+      e.preventDefault();
+      return;
+    }
 
-    if (e.code === 'ArrowUp' || e.code === 'KeyW') {
-      this.focus = (this.focus - 1 + count) % count;
-      this.audio.playSfx('swishgen', { volume: 0.45, rate: 1.3 });
+    const spec = this.currentMenuSpec();
+    const items = spec.items || [];
+    if (!items.length) return;
+
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
+      this.moveFocusDirectional(-1, 0, items);
+      this.audio.playSfx('swishgen', { volume: 0.42, rate: 1.3 });
+      e.preventDefault();
+    } else if (e.code === 'ArrowRight' || e.code === 'KeyD') {
+      this.moveFocusDirectional(1, 0, items);
+      this.audio.playSfx('swishgen', { volume: 0.42, rate: 1.3 });
+      e.preventDefault();
+    } else if (e.code === 'ArrowUp' || e.code === 'KeyW') {
+      this.moveFocusDirectional(0, -1, items);
+      this.audio.playSfx('swishgen', { volume: 0.42, rate: 1.3 });
       e.preventDefault();
     } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
-      this.focus = (this.focus + 1) % count;
-      this.audio.playSfx('swishgen', { volume: 0.45, rate: 1.3 });
+      this.moveFocusDirectional(0, 1, items);
+      this.audio.playSfx('swishgen', { volume: 0.42, rate: 1.3 });
       e.preventDefault();
     } else if (e.code === 'Enter' || e.code === 'Space') {
-      this.audio.playSfx('punchlig', { volume: 0.6 });
-      spec.items[this.focus]?.action();
+      this.audio.playSfx('punchlig', { volume: 0.65 });
+      items[this.focus]?.action();
       e.preventDefault();
     } else if (e.code === 'Escape' || e.code === 'Backspace') {
       if (this.screen !== 'main') {
         this.audio.playSfx('swishgen', { volume: 0.45, rate: 0.9 });
-        spec.items[count - 1]?.action();
+        items[items.length - 1]?.action();
       }
       e.preventDefault();
     }
@@ -971,7 +1125,7 @@ export class FrontendUI {
       const [rx, ry, rw, rh] = this.hitRects[i];
       if (x640 >= rx && x640 <= rx + rw && y480 >= ry && y480 <= ry + rh) {
         this.focus = i;
-        this.audio.playSfx('punchlig', { volume: 0.6 });
+        this.audio.playSfx('punchlig', { volume: 0.65 });
         spec.items[i]?.action();
         return;
       }
@@ -1001,18 +1155,32 @@ export class FrontendUI {
       }
     }
 
+    // Starting Splash Screen ("Made By Soham" prominently displayed!)
     if (this.screen === 'splash') {
-      // Subtle pulsing prompt at bottom of splash.jpg
-      const pulse = 0.65 + 0.35 * Math.sin(performance.now() * 0.005);
-      ctx.fillStyle = 'rgba(0,0,0,0.62)';
-      ctx.fillRect(140, 434, 360, 32);
-      ctx.font = '20px RRFuturaBold, sans-serif';
+      // Top-right / upper-banner signature badge
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+      ctx.fillRect(190, 12, 260, 38);
+      ctx.strokeStyle = '#ff6432';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(190.5, 12.5, 259, 37);
+
+      ctx.font = '26px RRBadloc, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#000';
-      ctx.fillText('CLICK OR PRESS ANY KEY TO RIDE', 322, 452);
+      ctx.fillStyle = '#000000';
+      ctx.fillText('Made By Soham', 322, 33);
+      ctx.fillStyle = '#ff9d2e';
+      ctx.fillText('Made By Soham', 320, 31);
+
+      // Pulsing "Click or Press Any Key" bar at bottom
+      const pulse = 0.65 + 0.35 * Math.sin(performance.now() * 0.005);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+      ctx.fillRect(120, 434, 400, 34);
+      ctx.font = '20px RRFuturaBold, sans-serif';
+      ctx.fillStyle = '#000000';
+      ctx.fillText('CLICK OR PRESS ANY KEY TO START', 322, 453);
       ctx.fillStyle = `rgba(225, 225, 128, ${pulse.toFixed(2)})`;
-      ctx.fillText('CLICK OR PRESS ANY KEY TO RIDE', 320, 450);
+      ctx.fillText('CLICK OR PRESS ANY KEY TO START', 320, 451);
       ctx.restore();
       return;
     }
@@ -1024,22 +1192,39 @@ export class FrontendUI {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.56)';
         ctx.fillRect(x, y, w, h);
       }
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.42)';
+      ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     };
 
-    // Optional top status strip (Street / Showroom)
-    if (spec.statusBanner) {
-      drawDarkRect(16, 10, 608, 28);
-      this.drawShadowText(ctx, spec.statusBanner, 26, 15, '17px RRFuturaDemi, sans-serif', '#e1e180');
+    // Main Menu "Made By Soham" signature badge (top-right, clear of biker face!)
+    if (spec.showAuthorBadge) {
+      drawDarkRect(424, 14, 202, 34);
+      ctx.font = '22px RRBadloc, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#000000';
+      ctx.fillText('Made By Soham', 527, 33);
+      ctx.fillStyle = '#ff9d2e';
+      ctx.fillText('Made By Soham', 525, 31);
     }
 
-    // Title box (Badloc orange #ff6432 with 2px black drop shadow)
+    if (spec.extraDarkRects) {
+      for (const [ex, ey, ew, eh] of spec.extraDarkRects) {
+        drawDarkRect(ex, ey, ew, eh);
+      }
+    }
+
+    if (spec.statusBanner) {
+      drawDarkRect(12, 8, 616, 28);
+      this.drawShadowText(ctx, spec.statusBanner, 22, 13, '16px RRFuturaDemi, sans-serif', '#e1e180');
+    }
+
     if (spec.title && spec.titleRect) {
       const [tx, ty, tw, th] = spec.titleRect;
       drawDarkRect(tx, ty, tw, th);
-      const tSize = spec.titleFontSize || 52;
-      this.drawWrappedBox(ctx, spec.title, tx + 10, ty + 8, tw - 20, th - 12, {
+      const tSize = spec.titleFontSize || 50;
+      this.drawWrappedBox(ctx, spec.title, tx + 8, ty + 6, tw - 16, th - 8, {
         font: `${tSize}px RRBadloc, sans-serif`,
         color: '#ff6432',
         lineHeight: tSize * 0.96,
@@ -1047,14 +1232,13 @@ export class FrontendUI {
       });
     }
 
-    // Description box (#defff0 Futura Regular/Demi)
     const focusedItem = spec.items?.[this.focus];
     const descText = spec.fixedDesc || focusedItem?.desc || '';
     if (descText && spec.descRect) {
       const [dx, dy, dw, dh] = spec.descRect;
       drawDarkRect(dx, dy, dw, dh);
-      const fSize = spec.descFontSize || 22;
-      this.drawWrappedBox(ctx, descText, dx + 10, dy + 8, dw - 20, dh - 14, {
+      const fSize = spec.descFontSize || 21;
+      this.drawWrappedBox(ctx, descText, dx + 10, dy + 8, dw - 20, dh - 12, {
         font: `${fSize}px RRFuturaRegular, sans-serif`,
         color: '#defff0',
         lineHeight: Math.round(fSize * 1.18),
@@ -1062,31 +1246,29 @@ export class FrontendUI {
       });
     }
 
-    // Custom Help screen list
     if (spec.customBody) {
-      drawDarkRect(20, 102, 600, 308);
-      let cy = 114;
+      drawDarkRect(16, 88, 608, 330);
+      let cy = 98;
       for (const bullet of spec.customBody) {
-        cy = this.drawWrappedBox(ctx, '• ' + bullet, 32, cy, 576, 60, {
-          font: '17px RRFuturaDemi, sans-serif',
-          color: '#defff0',
-          lineHeight: 20,
-          align: 'left'
-        }) + 5;
+        cy =
+          this.drawWrappedBox(ctx, '• ' + bullet, 28, cy, 584, 52, {
+            font: '16px RRFuturaDemi, sans-serif',
+            color: '#defff0',
+            lineHeight: 19,
+            align: 'left'
+          }) + 4;
       }
     }
 
-    // Standings table (15 riders)
     if (spec.standings) {
-      drawDarkRect(24, 80, 592, 342);
+      drawDarkRect(20, 72, 600, 348);
       const rows = spec.standings;
-      ctx.font = '16px RRFuturaBold, sans-serif';
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const col = i < 8 ? 0 : 1;
         const r = i % 8;
-        const rx = col === 0 ? 40 : 334;
-        const ry = 94 + r * 39;
+        const rx = col === 0 ? 36 : 332;
+        const ry = 84 + r * 40;
         const color = row.isPlayer ? '#ffff40' : i < 3 ? '#ffb86c' : '#defff0';
         this.drawShadowText(
           ctx,
@@ -1099,7 +1281,7 @@ export class FrontendUI {
         this.drawShadowText(
           ctx,
           row.timeStr,
-          rx + 185,
+          rx + 184,
           ry,
           '17px RRFuturaDemi, sans-serif',
           color
@@ -1118,18 +1300,34 @@ export class FrontendUI {
 
         const isFocused = i === this.focus;
         const labelColor = isFocused ? '#e1e180' : '#defff0';
-        if (isFocused) {
-          // Right-pointing yellow arrow with 2px black drop shadow at (bx + 6, by + 6)
-          this.drawFocusArrow(ctx, bx + 8, by + Math.floor((bh - 16) / 2));
+        const fontSize = bh >= 50 ? 21 : bh <= 26 ? 17 : 19;
+
+        if (it.centered) {
+          ctx.font = `${fontSize + 2}px RRFuturaBold, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const midY = by + bh * 0.5;
+          ctx.fillStyle = '#000000';
+          ctx.fillText(it.label, bx + bw * 0.5 + 2, midY + 2);
+          ctx.fillStyle = labelColor;
+          ctx.fillText(it.label, bx + bw * 0.5, midY);
+          if (isFocused) {
+            const textW = ctx.measureText(it.label).width;
+            this.drawFocusArrow(ctx, Math.max(bx + 10, bx + bw * 0.5 - textW * 0.5 - 22), midY - 8);
+          }
+        } else {
+          if (isFocused) {
+            this.drawFocusArrow(ctx, bx + 7, by + Math.floor((bh - 16) * 0.5));
+          }
+          this.drawShadowText(
+            ctx,
+            it.label,
+            bx + 23,
+            by + Math.floor((bh - (fontSize + 2)) * 0.5),
+            `${fontSize}px RRFuturaBold, sans-serif`,
+            labelColor
+          );
         }
-        this.drawShadowText(
-          ctx,
-          it.label,
-          bx + 26,
-          by + Math.floor((bh - 20) / 2),
-          '20px RRFuturaBold, sans-serif',
-          labelColor
-        );
       }
     }
 

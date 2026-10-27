@@ -1,60 +1,50 @@
-// Authentic 1996 Road Rash 60Hz Physics, Combat, Pedestrian, Police & Ramp Engine
-import { SAMPLE_LEN } from './courseRenderer.js';
+// Authentic 1996 Road Rash 60Hz Race Simulation Engine
+// Exact ROADRASH.EXE speed-to-sample scale (0.1526 samples/tick at 100 MPH, 33 samples = 0.1 mi),
+// exact race.cpp centrifugal curve sweep (-bend * ds * 1.5625), 6-speed gearbox & RPM needle,
+// smart/directional melee combat (punches, clubs, chains, timed weapon snatching),
+// lateral boot-kick shoves into traffic/walls, hittable pedestrians & sprinting crashed riders,
+// motorcycle cops (sirens, nightstick duels & busts), Superbike Nitro, and downed-bike stunt ramps!
 
 const RIVAL_ROSTER = [
-  { name: 'Natasha', remap: 1, weapon: 2, female: true, statsIdx: 2 },
-  { name: 'Slater', remap: 2, weapon: 1, female: false, statsIdx: 8 },
-  { name: 'P.E.No.1', remap: 3, weapon: 2, female: false, statsIdx: 12 },
-  { name: 'Bose', remap: 4, weapon: 1, female: false, statsIdx: 1 },
-  { name: 'Rhonda', remap: 5, weapon: 0, female: true, statsIdx: 5 },
-  { name: 'Ikira', remap: 6, weapon: 1, female: false, statsIdx: 10 },
-  { name: 'Mike', remap: 7, weapon: 2, female: false, statsIdx: 7 },
-  { name: 'Cydney', remap: 8, weapon: 0, female: true, statsIdx: 2 },
-  { name: 'Jon', remap: 9, weapon: 1, female: false, statsIdx: 3 },
-  { name: 'Pearl', remap: 10, weapon: 0, female: true, statsIdx: 4 },
-  { name: 'Sven', remap: 11, weapon: 1, female: false, statsIdx: 14 },
-  { name: 'Chino', remap: 12, weapon: 2, female: false, statsIdx: 9 },
-  { name: 'Slim Jim', remap: 13, weapon: 0, female: false, statsIdx: 6 },
-  { name: 'Spike', remap: 14, weapon: 1, female: false, statsIdx: 11 }
+  { name: 'Biff', aggr: 0.86, weapon: 1, bikeId: 3, female: false },
+  { name: 'Ikira', aggr: 0.72, weapon: 0, bikeId: 12, female: false },
+  { name: 'Lola', aggr: 0.68, weapon: 2, bikeId: 14, female: true },
+  { name: 'Natasha', aggr: 0.80, weapon: 2, bikeId: 7, female: true },
+  { name: 'Slater', aggr: 0.90, weapon: 1, bikeId: 4, female: false },
+  { name: 'Torque', aggr: 0.82, weapon: 1, bikeId: 11, female: false },
+  { name: 'Viper', aggr: 0.93, weapon: 2, bikeId: 8, female: false },
+  { name: 'Helga', aggr: 0.76, weapon: 1, bikeId: 10, female: true },
+  { name: 'Chino', aggr: 0.74, weapon: 0, bikeId: 2, female: false },
+  { name: 'Cannon', aggr: 0.66, weapon: 0, bikeId: 0, female: false },
+  { name: 'Sven', aggr: 0.78, weapon: 1, bikeId: 6, female: false },
+  { name: 'Roxy', aggr: 0.71, weapon: 2, bikeId: 13, female: true },
+  { name: 'Spike', aggr: 0.88, weapon: 2, bikeId: 5, female: false },
+  { name: 'Mugsy', aggr: 0.64, weapon: 1, bikeId: 1, female: false }
 ];
 
-const COP_NAMES = ['Ortega', 'Marshall', "O'Leary", "O'Shea", 'Flynn', 'Kelly', 'Krupke'];
-
-// Conversion: 330 samples = 1.0 mile -> 1 MPH at 60Hz = 330 / 3600 / 60 = 0.0015278 samples/tick
-const MPH_TO_SAMPLES_PER_TICK = 330 / 216000;
-const SAMPLES_PER_TICK_TO_MPH = 1 / MPH_TO_SAMPLES_PER_TICK;
-
-function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
-function wrapAngle(a) {
-  while (a > Math.PI) a -= Math.PI * 2;
-  while (a < -Math.PI) a += Math.PI * 2;
-  return a;
-}
+const COP_NAMES = ["O'Connor", 'Kowalski', 'Vance', ' Roscoe'];
+const GEAR_THRESHOLDS = [0.0, 0.23, 0.41, 0.58, 0.75, 0.90, 1.35];
 
 export class RaceSimulation {
-  constructor(assets, audio, courseRenderer, config, onRaceEnd) {
+  constructor(assets, audio, courseRenderer, config, onRaceComplete) {
     this.assets = assets;
     this.audio = audio;
     this.courseRenderer = courseRenderer;
     this.config = config;
-    this.onRaceEnd = onRaceEnd;
-
     this.course = courseRenderer.course;
-    this.startSample = this.course.startSample || 50;
-    this.finishSample =
-      this.course.finishSamples?.[config.level] || this.course.samples.length - 50;
+    this.onRaceComplete = onRaceComplete;
 
     this.ticks = 0;
-    this.countdownTicks = 150; // 2.5s 3..2..1 countdown
+    this.countdownTicks = 180; // 3.0s 3-2-1-GO! (lifecycle.hpp: 3 * 60)
     this.goBannerTicks = 0;
     this.paused = false;
     this.pauseFocus = 0;
-    this.ended = false;
-    this.endDelayTicks = 0;
-    this.endStatus = null;
+    this.completed = false;
+
+    const totalSamples = this.course.samples.length;
+    this.startSample = this.course.startSample || 50;
+    this.finishSample =
+      this.course.finishSamples?.[config.level] || Math.max(240, totalSamples - 50);
 
     this.bannerText = '';
     this.bannerColor = '#ffff40';
@@ -62,1446 +52,1268 @@ export class RaceSimulation {
 
     this.riders = [];
     this.player = null;
+    this.playerPlace = 15;
+    this.nearestRival = null;
+    this.focusedRival = null;
+    this.focusedTimer = 0;
+
     this.downedBikes = [];
     this.traffic = [];
     this.pedestrians = [];
-    this.cop = null;
-    this.effects = [];
+    this.cops = [];
+    this.activeCop = null;
 
-    this.playerPlace = 15;
-    this.nearestRival = null;
-
-    this.cameraSample = this.startSample - 1.48;
+    // Camera state for road.cpp::project_road
+    this.cameraSample = Math.max(1, this.startSample - 1.55);
     this.cameraLat = 0;
-    this.cameraHeight = 150;
+    this.cameraHeightOffset = 0;
+    this.headingAccum = 0;
 
-    this.initRace();
+    this.initRiders();
+    this.initTraffic();
+    this.initPedestrians();
+    this.initPolice();
   }
 
-  bikeStatsFor(bikeId, level) {
+  bikeStats(bikeId) {
     const raw = this.assets.frontend?.bikes?.[bikeId];
-    const hpLike = raw ? raw[42] : 38 + level * 2;
-    const mass = raw ? raw[6] : 200;
-    const cond = raw ? raw[81] : 160;
-    const nitroCharges = raw ? raw[86] : 0;
+    const cls = bikeId < 5 ? 'rat' : bikeId < 10 ? 'super' : 'sport';
+    const hasNitro = raw ? raw[86] > 0 : cls === 'super';
+    const hp = raw ? (raw[24] | (raw[25] << 8)) : 80;
 
-    // Top speed scales authentically from ~104 MPH (125cc Perro Pico) to ~196 MPH (1000cc Diablo Vipera N)
-    const topMph = 88 + (hpLike - 34) * 7.2;
-    const accel = (0.42 + (hpLike - 34) * 0.032) * (220 / Math.max(130, mass + 40));
-    const grip = clamp(1.12 - (mass - 160) * 0.0011, 0.78, 1.18);
+    const topMphBase =
+      cls === 'rat' ? 116 + (hp % 22) : cls === 'sport' ? 144 + (hp % 24) : 170 + (hp % 26);
+    const accelBase = cls === 'rat' ? 0.58 : cls === 'sport' ? 0.78 : 0.98;
+    const steerBase = cls === 'rat' ? 7.2 : cls === 'sport' ? 8.4 : 9.4;
 
     return {
-      topMph,
-      accel,
-      grip,
-      maxCond: Math.max(120, cond * 1.4),
-      nitroCharges: nitroCharges > 0 ? nitroCharges : this.config.mode === 'thrash' && level >= 2 ? 3 : 0
+      cls,
+      hasNitro,
+      nitroCharges: hasNitro ? 6 : 0,
+      topMph: topMphBase + this.config.level * 5,
+      accel: accelBase + this.config.level * 0.05,
+      steerRate: steerBase,
+      maxBikeCond: cls === 'rat' ? 135 : cls === 'sport' ? 155 : 175
     };
   }
 
-  initRace() {
-    const level = this.config.level || 0;
-    const pBike = this.bikeStatsFor(this.config.bikeId, level);
+  initRiders() {
+    const pStats = this.bikeStats(this.config.bikeId);
+    this.player = this.makeRider({
+      id: 0,
+      isPlayer: true,
+      name: this.config.playerName || 'Axle',
+      female: Boolean(this.config.female),
+      colorIdx: 0,
+      bikeId: this.config.bikeId,
+      stats: pStats,
+      sample: this.startSample,
+      lat: 95,
+      weapon: 0,
+      aggr: 0
+    });
+    this.riders.push(this.player);
+    this.cameraLat = this.player.lat;
 
-    // 1. Create Player (index 0) + 14 Rivals on 2-column staggered starting grid
-    this.riders = [];
-    const totalRiders = 15;
-    for (let i = 0; i < totalRiders; i++) {
-      const isPlayer = i === 0;
-      const rv = isPlayer ? null : RIVAL_ROSTER[(i - 1) % RIVAL_ROSTER.length];
-      const gridRow = isPlayer ? 7 : i <= 7 ? i - 1 : i;
-      const col = gridRow % 2 === 0 ? -135 : 135;
-      const sPos = this.startSample + (14 - gridRow) * 0.42;
+    for (let i = 0; i < 14; i++) {
+      const rdef = RIVAL_ROSTER[i];
+      const lvlBike = Math.min(14, (rdef.bikeId + this.config.level * 2) % 15);
+      const st = this.bikeStats(lvlBike);
+      const row = Math.floor((i + 1) / 2);
+      const col = (i + 1) % 2;
 
-      const rStat =
-        this.assets.frontend?.riderStats?.[isPlayer ? this.config.charIdx || 0 : rv.statsIdx] || {
-          stamina: 2600,
-          strength: 7,
-          speeds: [95, 112, 128, 148, 175]
-        };
+      const aiScale = 0.85 + (i / 14) * 0.21 + this.config.level * 0.025;
+      st.topMph = pStats.topMph * aiScale;
 
-      const maxStamina = isPlayer ? 120 : 88 + level * 14;
-      const aiBaseMph = (rStat.speeds?.[level] || 96 + level * 18) * (0.95 + (i % 5) * 0.025);
-
-      const rider = {
-        id: i,
-        isPlayer,
-        name: isPlayer ? this.config.playerName : rv.name,
-        female: isPlayer ? Boolean(this.config.female) : rv.female,
-        remap: isPlayer ? 0 : rv.remap,
-        sample: sPos,
-        lat: col,
-        latVel: 0,
-        airY: 0,
-        airVel: 0,
-        speedMph: 0,
-        lean: 0,
-        wobble: 0,
-
-        topMph: isPlayer ? pBike.topMph : aiBaseMph,
-        accel: isPlayer ? pBike.accel : 0.46 + level * 0.06,
-        grip: isPlayer ? pBike.grip : 0.96,
-        gear: 1,
-        rpmNorm: 0.18,
-
-        stamina: maxStamina,
-        maxStamina,
-        bikeCond: isPlayer ? pBike.maxCond : 220,
-        maxBikeCond: isPlayer ? pBike.maxCond : 220,
-
-        weapon: isPlayer ? 0 : level === 0 && i % 3 !== 0 ? 0 : rv.weapon, // 0=fists, 1=club, 2=chain
-        nitroCharges: isPlayer ? pBike.nitroCharges : 0,
-        nitroTicks: 0,
-
-        // State machine: 'riding' | 'crashing' | 'getting_up' | 'running' | 'remounting' | 'finished' | 'wrecked' | 'busted'
-        state: 'riding',
-        stateTicks: 0,
-        downedBike: null,
-        runHeading: 0,
-
-        // Combat state
-        attackCode: 0, // 0 = none, 10..27 = active swing
-        attackTicks: 0,
-        attackDuration: 0,
-        attackSide: 0, // -1 left, +1 right
-        attackType: 'punch', // 'punch' | 'club' | 'chain' | 'kick'
-        attackLanded: false,
-        staggerCode: 0,
-        staggerTicks: 0,
-        hitFlashTicks: 0,
-        aiSwingCooldown: 40 + (i * 13) % 70,
-        aiTargetLane: col + ((i * 53) % 180) - 90,
-
-        finished: false,
-        finishTicks: 0
-      };
-      this.riders.push(rider);
+      this.riders.push(
+        this.makeRider({
+          id: i + 1,
+          isPlayer: false,
+          name: rdef.name,
+          female: rdef.female,
+          colorIdx: (i % 14) + 1,
+          bikeId: lvlBike,
+          stats: st,
+          sample: this.startSample + row * 1.18,
+          lat: col === 0 ? -135 : 135,
+          weapon: i % 3 === 0 ? rdef.weapon : 0,
+          aggr: rdef.aggr,
+          aiLaneTarget: (col === 0 ? -155 : 155) + ((i * 37) % 90) - 45
+        })
+      );
     }
-    this.player = this.riders[0];
+  }
 
-    // 2. Spawn course traffic cars (both oncoming in left lane & cruising in right lane)
-    this.traffic = [];
-    const courseCars = this.assets.carsMeta?.courses?.[this.config.courseKey] || [];
-    const carTypeCount = Math.max(1, courseCars.length);
-    let sCursor = this.startSample + 36;
-    let carIdx = 0;
-    while (sCursor < this.finishSample + 60) {
-      const oncoming = carIdx % 2 === 0;
-      const pose = this.courseRenderer.samplePose(sCursor);
-      const laneLat = oncoming ? -pose.left * 0.48 : pose.right * 0.48;
-      const baseSpeed = 38 + (carIdx % 4) * 8 + level * 4;
-      this.traffic.push({
-        id: carIdx,
-        typeIdx: carIdx % carTypeCount,
-        sample: sCursor,
-        lat: laneLat,
-        latVel: 0,
-        oncoming,
-        speedMph: oncoming ? -baseSpeed : baseSpeed,
-        hitCooldown: 0
-      });
-      // Denser traffic in higher levels & The City / Peninsula
-      const spacing =
-        (this.config.courseKey === 'CITY' || this.config.courseKey === 'MEDLY' ? 42 : 56) -
-        level * 4 +
-        ((carIdx * 17) % 24);
-      sCursor += Math.max(26, spacing);
-      carIdx++;
-    }
-
-    // 3. Spawn animated pedestrians from real .CRS pedSpawns + regular crosswalk jaywalkers
-    this.pedestrians = [];
-    const pedLooks = this.assets.worldMeta?.pedestrians || [];
-    const lookCount = Math.max(1, pedLooks.length);
-    const rawSpawns = this.course.pedSpawns || [];
-
-    const usedSamples = new Set();
-    for (let i = 0; i < rawSpawns.length; i++) {
-      const [rIdx, rawLat, lookId] = rawSpawns[i];
-      if (rIdx < this.startSample + 18 || rIdx > this.finishSample + 30) continue;
-      usedSamples.add(Math.floor(rIdx / 12));
-      const pose = this.courseRenderer.samplePose(rIdx);
-      const crossing = i % 2 === 0;
-      const side = rawLat < 0 ? -1 : 1;
-      const startLat = crossing
-        ? side * (pose.right * 0.88)
-        : side * (pose.right + pose.shR * 0.42);
-      this.pedestrians.push({
-        id: this.pedestrians.length,
-        sample: rIdx,
-        lat: startLat,
-        dir: crossing ? -side : 0, // crossing across lanes or strolling along sidewalk
-        walkAlong: crossing ? 0 : (i % 4 < 2 ? 1 : -1),
-        lookId: clamp(lookId, 0, lookCount - 1),
-        active: true,
-        state: 'walking', // 'walking' | 'hit'
-        animTick: (i * 11) % 60,
-        airY: 0,
-        airVel: 0,
-        latVel: 0,
-        sampleVel: 0,
-        spinAngle: 0
-      });
-    }
-
-    // Ensure lively jaywalking pedestrians every ~65 samples so every track has fun pedestrian dodges/clips
-    for (let s = this.startSample + 28; s < this.finishSample; s += 62) {
-      if (usedSamples.has(Math.floor(s / 12))) continue;
-      const pose = this.courseRenderer.samplePose(s);
-      const side = (s % 4 < 2) ? -1 : 1;
-      this.pedestrians.push({
-        id: this.pedestrians.length,
-        sample: s,
-        lat: side * (pose.right * 0.72),
-        dir: -side,
-        walkAlong: 0,
-        lookId: s % lookCount,
-        active: true,
-        state: 'walking',
-        animTick: s % 42,
-        airY: 0,
-        airVel: 0,
-        latVel: 0,
-        sampleVel: 0,
-        spinAngle: 0
-      });
-    }
-
-    // 4. Spawn Motorcycle Police Officer (LOCOP.DAT) patrolling ahead
-    this.cop = {
-      name: COP_NAMES[(this.config.courseId + level) % COP_NAMES.length],
-      active: true,
-      chasing: false,
-      sample: this.startSample + 145,
-      lat: 210,
+  makeRider(opts) {
+    return {
+      ...opts,
+      speedMph: 0,
       latVel: 0,
+      shoveVel: 0,
+      lean: 0,
+      gear: 1,
+      rpmNorm: 0.16,
       airY: 0,
       airVel: 0,
-      speedMph: 58,
-      lean: 0,
-      stamina: 110 + level * 20,
-      maxStamina: 110 + level * 20,
-      state: 'riding', // 'riding' | 'crashing'
-      stateTicks: 0,
-      attackCode: 0,
-      attackTicks: 0,
-      swingCooldown: 50,
-      respawnCooldown: 0
+      offRoad: false,
+      skidding: false,
+      runCompass: Math.PI,
+      stamina: 100,
+      maxStamina: 100,
+      bikeCond: opts.stats.maxBikeCond,
+      maxBikeCond: opts.stats.maxBikeCond,
+      nitroCharges: opts.stats.nitroCharges,
+      nitroTicks: 0,
+      state: 'riding', // 'riding' | 'crashing' | 'running' | 'busted' | 'wrecked'
+      stateTimer: 0,
+      downedBikeRef: null,
+      animId: 2,
+      animStep: 0,
+      animTick: 0,
+      forceMirror: null,
+      attackType: null,
+      attackSide: 1,
+      attackPhase: 'idle',
+      attackTimer: 0,
+      hitDone: false,
+      staggerTimer: 0,
+      hitSparkTimer: 0,
+      lastHitSide: 1,
+      finished: false,
+      finishTick: 0,
+      place: 15,
+      aiCooldown: 35 + Math.floor(Math.random() * 55)
     };
   }
 
-  showBanner(text, color = '#ffff40', ticks = 85) {
-    this.bannerText = text;
-    this.bannerColor = color;
-    this.bannerTicks = ticks;
-  }
+  initTraffic() {
+    const courseCars = this.assets.carsMeta?.courses?.[this.course.name] || [];
+    const numKinds = Math.max(1, courseCars.length);
+    const totalSpan = this.finishSample - (this.startSample + 22);
+    const count = Math.min(36, Math.max(18, Math.floor(totalSpan / 45)));
 
-  spawnSparks(sample, lat, extraY = 45, count = 8, color = '#ffe066') {
-    const pose = this.courseRenderer.samplePose(sample, lat, extraY);
     for (let i = 0; i < count; i++) {
-      this.effects.push({
-        kind: 'spark',
-        wx: pose.x + (Math.random() - 0.5) * 40,
-        wy: pose.y + (Math.random() - 0.5) * 30,
-        wz: pose.z + (Math.random() - 0.5) * 40,
-        vx: (Math.random() - 0.5) * 14,
-        vy: 4 + Math.random() * 12,
-        vz: (Math.random() - 0.5) * 14,
-        color,
-        ticks: 14 + Math.floor(Math.random() * 10)
+      const s = this.startSample + 24 + (i + 0.5) * (totalSpan / count);
+      const smp = this.sampleInfoAt(s);
+      const oncoming = i % 2 === 0;
+      const laneMag = Math.max(115, (oncoming ? smp.left : smp.right) * 0.52);
+      this.traffic.push({
+        id: i,
+        active: true,
+        kind: i % numKinds,
+        sample: s,
+        dir: oncoming ? -1 : 1,
+        mph: oncoming ? 44 + (i % 18) : 48 + (i % 20),
+        lat: oncoming ? -laneMag : laneMag,
+        hornCooldown: 0
       });
     }
   }
 
-  spawnCallout(sample, lat, text, color = '#ffff40') {
-    const pose = this.courseRenderer.samplePose(sample, lat, 165);
-    this.effects.push({
-      kind: 'callout',
-      wx: pose.x,
-      wy: pose.y,
-      wz: pose.z,
-      vx: 0,
-      vy: 2.2,
-      vz: 0,
-      text,
-      color,
-      ticks: 48
-    });
-  }
+  initPedestrians() {
+    const pedsMeta = this.assets.worldMeta?.pedestrians || [];
+    const maxTypes = Math.max(1, pedsMeta.length);
+    const spawns = this.course.pedSpawns || [];
 
-  // ==================== PLAYER COMBAT TRIGGERS ====================
-
-  triggerAttack(kind, inputState) {
-    const p = this.player;
-    if (this.paused || this.countdownTicks > 0 || p.state !== 'riding' || p.attackTicks > 0) return;
-
-    // Pick side: explicit punchL / punchR, or toward nearest adjacent rival/cop for Kick!
-    let side = 1;
-    if (kind === 'left') {
-      side = -1;
-    } else if (kind === 'right') {
-      side = 1;
-    } else if (kind === 'kick') {
-      if (inputState.left && !inputState.right) side = -1;
-      else if (inputState.right && !inputState.left) side = 1;
-      else {
-        const near = this.findClosestCombatTarget(p, 2.4, 280);
-        side = near && near.lat < p.lat ? -1 : 1;
+    if (spawns.length > 0) {
+      const step = Math.max(1, Math.floor(spawns.length / 65));
+      for (let i = 0; i < spawns.length; i += step) {
+        const [sIdx, rawLat, pType] = spawns[i];
+        if (sIdx < this.startSample + 10 || sIdx > this.finishSample - 8) continue;
+        const smp = this.sampleInfoAt(sIdx);
+        if (smp.tunnel) continue;
+        const isCrossing = (smp.flags & 8) !== 0 || i % 3 === 0;
+        const startLat = rawLat || (i % 2 === 0 ? -(smp.left + 45) : smp.right + 45);
+        this.pedestrians.push({
+          active: true,
+          type: (pType || i) % maxTypes,
+          sample: sIdx + 0.25,
+          lat: startLat,
+          vx: isCrossing ? (startLat < 0 ? 1.85 : -1.85) : 0,
+          moving: isCrossing,
+          state: 'walk',
+          airY: 0,
+          airVel: 0,
+          spinAngle: 0,
+          animStep: i % 6,
+          animTick: 0,
+          edgeLimit: Math.max(smp.left, smp.right) + 95
+        });
+      }
+    } else {
+      for (let s = this.startSample + 20; s < this.finishSample - 15; s += 30) {
+        const smp = this.sampleInfoAt(s);
+        if (smp.tunnel) continue;
+        const side = (s & 2) === 0 ? -1 : 1;
+        const edge = side < 0 ? -(smp.left + 48) : smp.right + 48;
+        this.pedestrians.push({
+          active: true,
+          type: (s * 7) % maxTypes,
+          sample: s + 0.25,
+          lat: edge * 0.78,
+          vx: -side * 1.75,
+          moving: true,
+          state: 'walk',
+          airY: 0,
+          airVel: 0,
+          spinAngle: 0,
+          animStep: s % 6,
+          animTick: 0,
+          edgeLimit: Math.max(smp.left, smp.right) + 95
+        });
       }
     }
+  }
 
-    p.attackSide = side;
-    p.attackLanded = false;
-
-    if (kind === 'kick') {
-      p.attackType = 'kick';
-      p.attackCode = side < 0 ? 26 : 27;
-      p.attackDuration = 22;
-      p.attackTicks = 22;
-      this.audio.playSfx('swishgen', { volume: 0.7, rate: 0.92 });
-      return;
+  initPolice() {
+    const patrolCount = 2 + Math.min(2, Math.floor(this.config.level / 2));
+    const span = this.finishSample - (this.startSample + 110);
+    for (let i = 0; i < patrolCount; i++) {
+      const spawnS = this.startSample + 120 + Math.floor(((i + 0.45) * span) / patrolCount);
+      this.cops.push({
+        id: i,
+        name: COP_NAMES[i % COP_NAMES.length].trim(),
+        active: false,
+        chasing: false,
+        spawnSample: spawnS,
+        sample: spawnS,
+        lat: 195,
+        latVel: 0,
+        mph: 0,
+        lean: 0,
+        airY: 0,
+        stamina: 115,
+        animId: 0,
+        animStep: 0,
+        animTick: 0,
+        attackCooldown: 45
+      });
     }
+  }
 
-    if (p.weapon === 2) {
-      p.attackType = 'chain';
-      p.attackCode = side < 0 ? 10 : 11;
-      p.attackDuration = 26;
-      p.attackTicks = 26;
-      this.audio.playSfx('swishcha', { volume: 0.85, rate: 1.0 });
-    } else if (p.weapon === 1) {
-      p.attackType = 'club';
-      p.attackCode = side < 0 ? 16 : 17;
-      p.attackDuration = 24;
-      p.attackTicks = 24;
-      this.audio.playSfx('swishgen', { volume: 0.8, rate: 1.0 });
-    } else {
-      p.attackType = 'punch';
-      p.attackCode = side < 0 ? 22 : 23;
-      p.attackDuration = 18;
-      p.attackTicks = 18;
-      this.audio.playSfx('swishgen', { volume: 0.68, rate: 1.18 });
-    }
+  // Decode compact course.samples[idx] array into clean physical fields!
+  sampleInfoAt(sFloat) {
+    const arr = this.course.samples;
+    const idx = Math.max(0, Math.min(arr.length - 1, Math.floor(sFloat)));
+    const raw = arr[idx];
+    const ttype = raw[11] || 0;
+    return {
+      idx,
+      bend: raw[0] || 0,
+      rise: raw[1] || 0,
+      elev: raw[2] || 0,
+      left: raw[3] || 500,
+      right: raw[4] || 500,
+      shL: raw[5] || 220,
+      shR: raw[6] || 220,
+      hL: raw[7] || 0,
+      hR: raw[8] || 0,
+      flags: raw[9] || 0,
+      tunnel: raw[10] === 1,
+      ttype,
+      hasWallL: ttype === 0 ? raw[14] >= 0 : (raw[22] || 0) > 55,
+      hasWallR: ttype === 0 ? raw[15] >= 0 : (raw[23] || 0) > 55,
+      coastalDropL: (ttype === 1 || ttype === 3) && (raw[22] || 0) <= 40,
+      raw
+    };
+  }
+
+  showBanner(text, color = '#ffff40', durationTicks = 80) {
+    this.bannerText = text;
+    this.bannerColor = color;
+    this.bannerTicks = durationTicks;
   }
 
   triggerNitro() {
     const p = this.player;
-    if (this.paused || this.countdownTicks > 0 || p.state !== 'riding') return;
+    if (!p || p.state !== 'riding') return;
     if (p.nitroCharges > 0 && p.nitroTicks <= 0) {
-      p.nitroCharges--;
-      p.nitroTicks = 95; // ~1.6s roaring superbike boost
-      this.audio.playSfx('engnitro', { volume: 0.75, rate: 1.1 });
-      this.showBanner('NITRO BOOST!', '#66e6ff', 50);
+      p.nitroCharges -= 1;
+      p.nitroTicks = 135;
+      this.audio.playSfx('m_yeah', { volume: 0.72 });
+      this.showBanner(`NITRO BOOST! (${p.nitroCharges} LEFT)`, '#66e6ff', 65);
     }
   }
 
-  // ==================== 60HZ SIMULATION STEP ====================
+  pickSmartSide(rider, steerDir = 0) {
+    let bestSide = steerDir < 0 ? -1 : steerDir > 0 ? 1 : rider.lean < -0.1 ? -1 : 1;
+    let bestScore = 9999;
+
+    for (const other of this.riders) {
+      if (other === rider || other.state !== 'riding' || other.finished) continue;
+      const ds = Math.abs(other.sample - rider.sample);
+      const dLat = other.lat - rider.lat;
+      if (ds < 1.7 && Math.abs(dLat) < 210) {
+        const score = ds * 95 + Math.abs(dLat);
+        if (score < bestScore) {
+          bestScore = score;
+          bestSide = dLat < 0 ? -1 : 1;
+        }
+      }
+    }
+    for (const cop of this.cops) {
+      if (!cop.active) continue;
+      const ds = Math.abs(cop.sample - rider.sample);
+      const dLat = cop.lat - rider.lat;
+      if (ds < 1.7 && Math.abs(dLat) < 210) {
+        const score = ds * 95 + Math.abs(dLat);
+        if (score < bestScore) {
+          bestScore = score;
+          bestSide = dLat < 0 ? -1 : 1;
+        }
+      }
+    }
+    return bestSide;
+  }
+
+  // Unified attack trigger called from keyboard or touch buttons!
+  // kind: 'smart' | 'left' | 'right' | 'kick'
+  triggerAttack(kind, inputState = {}) {
+    const p = this.player;
+    if (!p || p.state !== 'riding' || p.attackPhase !== 'idle' || this.countdownTicks > 0) return;
+
+    const steerDir = (inputState.right ? 1 : 0) - (inputState.left ? 1 : 0);
+    if (kind === 'kick') {
+      const side = this.pickSmartSide(p, steerDir);
+      this.startAttack(p, 'kick', side);
+    } else if (kind === 'left') {
+      this.startAttack(p, p.weapon > 0 ? 'weapon' : 'punch', -1);
+    } else if (kind === 'right') {
+      this.startAttack(p, p.weapon > 0 ? 'weapon' : 'punch', 1);
+    } else {
+      const side = this.pickSmartSide(p, steerDir);
+      this.startAttack(p, p.weapon > 0 ? 'weapon' : 'punch', side);
+    }
+  }
+
+  playGrunt(female) {
+    if (female) {
+      const n = 1 + Math.floor(Math.random() * 3);
+      this.audio.playSfx(`gruntf${n}_`, { volume: 0.78 });
+    } else {
+      const n = 1 + Math.floor(Math.random() * 5);
+      this.audio.playSfx(`gruntm${n}_`, { volume: 0.78 });
+    }
+  }
+
+  // ==================== MAIN 60HZ TICK ====================
 
   step(input) {
-    if (this.paused || this.ended) return;
-    this.ticks++;
+    if (this.paused || this.completed) return;
 
-    if (this.bannerTicks > 0) this.bannerTicks--;
-    if (this.goBannerTicks > 0) this.goBannerTicks--;
+    const prevPlayerSample = this.player.sample;
 
-    // Countdown before green flag
     if (this.countdownTicks > 0) {
-      if (this.countdownTicks % 60 === 0) {
-        this.audio.playSfx('punchlig', { volume: 0.65, rate: 1.4 });
+      this.countdownTicks -= 1;
+      if (this.countdownTicks === 120 || this.countdownTicks === 60) {
+        this.audio.playSfx('swishgen', { volume: 0.55, rate: 1.05 });
+      } else if (this.countdownTicks === 1) {
+        this.goBannerTicks = 55;
+        this.audio.playSfx(this.player.female ? 'f_yeah' : 'm_yeah', { volume: 0.85 });
       }
-      this.countdownTicks--;
-      if (this.countdownTicks === 0) {
-        this.goBannerTicks = 70;
-        this.audio.playSfx('m_yeah', { volume: 0.85 });
-      }
-      this.player.rpmNorm = input.gas ? 0.55 + Math.sin(this.ticks * 0.35) * 0.12 : 0.22;
-      this.updateCamera();
-      this.updateAudioLoops(false, false);
+      this.player.rpmNorm = input.gas ? 0.68 : 0.22;
+      this.audio.updateRaceLoops({
+        bikeId: this.player.bikeId,
+        rpmNorm: this.player.rpmNorm,
+        speedMph: 0,
+        inTunnel: false
+      });
       return;
     }
 
-    // Check delayed race end transition
-    if (this.endDelayTicks > 0) {
-      this.endDelayTicks--;
-      if (this.endDelayTicks === 0) {
-        this.finishAndExit(this.endStatus);
-        return;
-      }
+    this.ticks += 1;
+    if (this.goBannerTicks > 0) this.goBannerTicks -= 1;
+    if (this.bannerTicks > 0) this.bannerTicks -= 1;
+    if (this.focusedTimer > 0) {
+      this.focusedTimer -= 1;
+      if (this.focusedTimer === 0) this.focusedRival = null;
     }
 
-    // 1. Step all 15 riders
-    let playerSkidding = false;
-    let playerOffRoad = false;
-    for (let i = 0; i < this.riders.length; i++) {
-      const r = this.riders[i];
-      if (r.isPlayer) {
-        const res = this.stepPlayerRider(r, input);
-        playerSkidding = res.skidding;
-        playerOffRoad = res.offRoad;
-      } else {
-        this.stepAiRider(r);
-      }
-    }
-
-    // 2. Step downed motorcycles sliding on the road & ramp physics!
+    this.stepTraffic();
+    this.stepPedestrians();
     this.stepDownedBikes();
 
-    // 3. Step rider-vs-rider combat swings, boot-kick lateral shoves & body-to-bike collisions
-    this.stepRiderInteractions();
-
-    // 4. Step traffic cars & car collisions (including kicked rivals slamming into oncoming cars!)
-    this.stepTraffic();
-
-    // 5. Step walking pedestrians & comical hit/tumble physics
-    this.stepPedestrians();
-
-    // 6. Step motorcycle cop pursuit, nightstick combat & bust logic
-    this.stepCop();
-
-    // 7. Step visual sparks / callouts
-    for (let i = this.effects.length - 1; i >= 0; i--) {
-      const fx = this.effects[i];
-      fx.wx += fx.vx;
-      fx.wy += fx.vy;
-      fx.wz += fx.vz;
-      if (fx.kind === 'spark') fx.vy -= 0.9;
-      fx.ticks--;
-      if (fx.ticks <= 0) this.effects.splice(i, 1);
+    for (const r of this.riders) {
+      if (r.isPlayer) this.stepPlayerRider(r, input);
+      else this.stepAIRider(r);
     }
 
-    // 8. Compute live standings (1..15) and nearest rival for HUD
-    this.updateStandingsAndNearest();
-
-    // 9. Update smooth 1996 follow camera & Doppler audio loops
-    this.updateCamera();
-    const camPose = this.courseRenderer.samplePose(this.player.sample);
-    this.updateAudioLoops(playerSkidding, playerOffRoad, camPose.tunnel);
+    this.stepRiderToRiderCollisions();
+    this.stepPolice();
+    this.updateStandings();
+    this.updateCameraAndAudio(prevPlayerSample);
+    this.checkEndConditions();
   }
 
-  stepPlayerRider(p, input) {
-    if (p.hitFlashTicks > 0) p.hitFlashTicks--;
-    if (p.staggerTicks > 0) p.staggerTicks--;
-    if (p.stamina < p.maxStamina && this.ticks % 8 === 0 && p.state === 'riding') {
-      p.stamina = Math.min(p.maxStamina, p.stamina + 0.45);
-    }
+  // ==================== PLAYER & AI MOTORCYCLE PHYSICS ====================
 
-    if (p.state !== 'riding') {
-      this.stepCrashedRider(p);
-      return { skidding: false, offRoad: false };
-    }
-
-    const pose = this.courseRenderer.samplePose(p.sample, p.lat);
-    const offLeft = p.lat < -pose.left;
-    const offRight = p.lat > pose.right;
-    const offRoad = offLeft || offRight;
-
-    // Steering & lean
-    const steerInput = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    if (steerInput !== 0) {
-      p.lean = clamp(p.lean + steerInput * 0.085 * p.grip, -1.0, 1.0);
-    } else {
-      p.lean *= 0.84;
-      if (Math.abs(p.lean) < 0.02) p.lean = 0;
-    }
-
-    // Nitro boost
-    if (p.nitroTicks > 0) p.nitroTicks--;
-    const effectiveTop = p.topMph * (p.nitroTicks > 0 ? 1.24 : 1.0) * (offRoad ? 0.68 : 1.0);
-
-    // Throttle, braking, hill slope & aerodynamic drag
-    let skidding = false;
-    if (input.gas && p.endDelay === undefined) {
-      const ratio = p.speedMph / Math.max(40, effectiveTop);
-      const torque = p.accel * (1.18 - ratio * 0.72) * (p.nitroTicks > 0 ? 1.65 : 1.0);
-      p.speedMph += Math.max(0.05, torque);
-    } else if (input.brake) {
-      p.speedMph -= 1.35;
-      if (p.speedMph > 35) skidding = true;
-    } else {
-      p.speedMph -= 0.24;
-    }
-
-    // Hill gravity (uphill slows slightly, downhill accelerates!)
-    p.speedMph -= pose.rise * 0.0022;
-    if (offRoad && p.speedMph > effectiveTop) {
-      p.speedMph -= 0.85;
-    }
-    p.speedMph = clamp(p.speedMph, 0, effectiveTop + 18);
-
-    // Automatic 6-speed gearbox & tachometer needle feel
-    const gearSpan = Math.max(18, p.topMph / 6);
-    p.gear = clamp(1 + Math.floor(p.speedMph / gearSpan), 1, 6);
-    const gearLo = (p.gear - 1) * gearSpan;
-    p.rpmNorm = clamp(0.24 + ((p.speedMph - gearLo) / gearSpan) * 0.74, 0.16, 1.02);
-
-    // Advance longitudinal sample & lateral position (including curve centrifugal pull + kick shove!)
-    const ds = p.speedMph * MPH_TO_SAMPLES_PER_TICK;
-    const prevRise = pose.rise;
-    p.sample += ds;
-
-    const speedFactor = clamp(p.speedMph / 75, 0.22, 1.35);
-    const steerLat = p.lean * 12.2 * speedFactor * (offRoad ? 0.72 : 1.0);
-    const centrifugal = -pose.bend * ds * 18.5 * speedFactor;
-
-    p.lat += steerLat + centrifugal + p.latVel + p.wobble;
-    p.latVel *= 0.86;
-    p.wobble *= -0.76;
-    if (Math.abs(p.latVel) < 0.15) p.latVel = 0;
-    if (Math.abs(p.wobble) < 0.15) p.wobble = 0;
-
-    if (Math.abs(p.lean) > 0.85 && p.speedMph > 65) skidding = true;
-
-    // Crest jump physics on steep hilltops (like San Francisco Lombard/Nob Hill!)
-    const nextPose = this.courseRenderer.samplePose(p.sample, p.lat);
-    if (p.airY <= 0 && prevRise > 28 && nextPose.rise < prevRise - 16 && p.speedMph > 68) {
-      p.airVel = Math.min(20, (prevRise - nextPose.rise) * 0.28 * (p.speedMph / 95));
-    }
-    this.integrateAir(p);
-
-    // Building / cliff wall & roadside solid object collisions
-    this.checkWallAndSceneryCollision(p, nextPose);
-
-    // Advance active melee attack timer
-    if (p.attackTicks > 0) {
-      p.attackTicks--;
-      if (p.attackTicks === 0) p.attackCode = 0;
-    }
-
-    // Crossing finish line!
-    if (!p.finished && p.sample >= this.finishSample) {
-      p.finished = true;
-      p.finishTicks = this.ticks;
-      this.audio.playSfx(p.female ? 'f_yeah' : 'm_yeah', { volume: 0.95 });
-      this.showBanner('FINISH LINE!', '#ffff40', 90);
-      this.endStatus = 'finished';
-      this.endDelayTicks = 75;
-    }
-
-    return { skidding, offRoad };
-  }
-
-  stepAiRider(r) {
-    if (r.hitFlashTicks > 0) r.hitFlashTicks--;
-    if (r.staggerTicks > 0) r.staggerTicks--;
-    if (r.stamina < r.maxStamina && this.ticks % 12 === 0 && r.state === 'riding') {
-      r.stamina = Math.min(r.maxStamina, r.stamina + 0.35);
-    }
-
+  stepPlayerRider(r, input) {
     if (r.state !== 'riding') {
-      this.stepCrashedRider(r);
+      this.stepNonRidingState(r);
       return;
     }
 
-    const pose = this.courseRenderer.samplePose(r.sample, r.lat);
+    const steerInput = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    this.integrateMotorcyclePhysics(r, {
+      throttle: Boolean(input.gas || input.throttle),
+      brake: Boolean(input.brake),
+      steer: steerInput
+    });
+  }
 
-    // Gentle OG rubber-banding so rivals stay competitive & brawling around the player
-    const gapToPlayer = r.sample - this.player.sample;
-    let rubber = 1.0;
-    if (gapToPlayer > 32) rubber = 0.88;
-    else if (gapToPlayer < -28) rubber = 1.13;
-    else if (Math.abs(gapToPlayer) < 8) rubber = 1.01;
-
-    const targetSpeed = r.topMph * rubber;
-    if (r.speedMph < targetSpeed) {
-      r.speedMph = Math.min(targetSpeed, r.speedMph + r.accel * 0.95);
-    } else {
-      r.speedMph = Math.max(targetSpeed, r.speedMph - 0.35);
+  stepAIRider(r) {
+    if (r.finished) {
+      r.speedMph = Math.max(0, r.speedMph - 1.5);
+      return;
+    }
+    if (r.state !== 'riding') {
+      this.stepNonRidingState(r);
+      return;
     }
 
-    // AI lane choice: weave around oncoming traffic & swerve toward player to brawl!
-    if ((this.ticks + r.id * 11) % 35 === 0) {
-      if (Math.abs(gapToPlayer) < 4.5 && Math.abs(this.player.lat - r.lat) < 340) {
-        const offset = this.player.lat > r.lat ? -95 : 95;
-        r.aiTargetLane = clamp(this.player.lat + offset, -pose.left * 0.8, pose.right * 0.8);
-      } else {
-        // Favor right half of road to dodge oncoming left-lane cars
-        r.aiTargetLane = clamp(
-          pose.right * 0.15 + Math.sin(this.ticks * 0.02 + r.id * 1.7) * (pose.right * 0.55),
-          -pose.left * 0.72,
-          pose.right * 0.82
-        );
-      }
-    }
+    const smp = this.sampleInfoAt(r.sample);
+    const lookSmp = this.sampleInfoAt(r.sample + 5);
 
-    // Dodge imminent oncoming car
+    let targetLat = r.aiLaneTarget;
     for (const car of this.traffic) {
-      const dsCar = car.sample - r.sample;
-      if (dsCar > 0 && dsCar < 10 && Math.abs(car.lat - r.lat) < 135) {
-        r.aiTargetLane = car.lat < 0 ? Math.min(pose.right * 0.75, car.lat + 220) : Math.max(-pose.left * 0.75, car.lat - 220);
+      const ds = car.sample - r.sample;
+      if (ds > 0 && ds < 10 && Math.abs(car.lat - targetLat) < 110) {
+        targetLat = car.lat > 0 ? -155 : 165;
         break;
       }
     }
 
-    const latErr = r.aiTargetLane - r.lat;
-    // While staggered from a punch/weapon/boot-kick, rival loses steering control and careens across lanes!
-    r.lean = r.staggerTicks > 0 ? clamp(r.latVel * 0.025, -0.85, 0.85) : clamp(latErr * 0.0045, -0.78, 0.78);
+    const distToPlayer = r.sample - this.player.sample;
+    if (Math.abs(distToPlayer) < 6 && this.player.state === 'riding' && r.aggr > 0.72) {
+      const sideOffset = r.id % 2 === 0 ? 78 : -78;
+      targetLat = this.player.lat + sideOffset;
+    }
 
-    const ds = r.speedMph * MPH_TO_SAMPLES_PER_TICK;
-    r.sample += ds;
-    r.lat += (r.staggerTicks > 0 ? 0 : r.lean * 8.5) + r.latVel + r.wobble;
-    r.latVel *= r.staggerTicks > 0 ? 0.91 : 0.87;
-    r.wobble *= -0.76;
-    if (Math.abs(r.latVel) < 0.15) r.latVel = 0;
+    const maxRoadL = -(smp.left - 55);
+    const maxRoadR = smp.right - 55;
+    targetLat = Math.max(maxRoadL, Math.min(maxRoadR, targetLat));
 
-    this.integrateAir(r);
-    this.checkWallAndSceneryCollision(r, pose);
+    const latErr = targetLat - r.lat;
+    const curveAnticipation = lookSmp.bend * 0.012;
+    const steer = Math.max(-1, Math.min(1, latErr * 0.018 + curveAnticipation));
 
-    // AI melee attack when alongside player
-    if (r.attackTicks > 0) {
-      r.attackTicks--;
-      if (r.attackTicks === 0) r.attackCode = 0;
-    } else if (r.aiSwingCooldown > 0) {
-      r.aiSwingCooldown--;
-    } else if (
-      this.player.state === 'riding' &&
-      Math.abs(r.sample - this.player.sample) < 1.25 &&
-      Math.abs(r.lat - this.player.lat) < 175
-    ) {
-      const side = this.player.lat < r.lat ? -1 : 1;
-      r.attackSide = side;
-      r.attackLanded = false;
-      if (r.weapon === 2) {
-        r.attackType = 'chain';
-        r.attackCode = side < 0 ? 10 : 11;
-        r.attackDuration = 30;
-        r.attackTicks = 30;
-      } else if (r.weapon === 1) {
-        r.attackType = 'club';
-        r.attackCode = side < 0 ? 16 : 17;
-        r.attackDuration = 28;
-        r.attackTicks = 28;
-      } else if ((this.ticks + r.id) % 4 === 0) {
-        r.attackType = 'kick';
-        r.attackCode = side < 0 ? 26 : 27;
-        r.attackDuration = 24;
-        r.attackTicks = 24;
-      } else {
-        r.attackType = 'punch';
-        r.attackCode = side < 0 ? 22 : 23;
-        r.attackDuration = 22;
-        r.attackTicks = 22;
+    let speedMul = 1.0;
+    if (distToPlayer > 30) speedMul = 0.90;
+    else if (distToPlayer < -24) speedMul = 1.09;
+
+    const cornerCaution = Math.abs(lookSmp.bend) > 45 && r.speedMph > r.stats.topMph * 0.84;
+
+    if (r.aiCooldown > 0) r.aiCooldown -= 1;
+    if (this.ticks > 150 && r.attackPhase === 'idle' && r.aiCooldown <= 0) {
+      const target = this.findAdjacentTarget(r);
+      if (target && Math.random() < r.aggr * 0.08) {
+        const side = target.lat < r.lat ? -1 : 1;
+        const kind = r.weapon > 0 ? 'weapon' : Math.random() < 0.28 ? 'kick' : 'punch';
+        this.startAttack(r, kind, side);
+        r.aiCooldown = 95 + Math.floor(Math.random() * 90);
       }
-      r.aiSwingCooldown = 52 + (r.id * 9) % 40;
     }
 
-    if (!r.finished && r.sample >= this.finishSample) {
-      r.finished = true;
-      r.finishTicks = this.ticks;
-    }
+    this.integrateMotorcyclePhysics(
+      r,
+      {
+        throttle: !cornerCaution && r.speedMph < r.stats.topMph * speedMul,
+        brake: cornerCaution,
+        steer
+      },
+      speedMul
+    );
   }
 
-  integrateAir(actor) {
-    if (actor.airY > 0 || actor.airVel > 0) {
-      actor.airY += actor.airVel;
-      actor.airVel -= 1.05; // gravity
-      if (actor.airY <= 0) {
-        actor.airY = 0;
-        const impactVel = -actor.airVel;
-        actor.airVel = 0;
-        if (impactVel > 9 && actor.state === 'riding') {
-          if (actor.isPlayer) {
-            this.audio.playSfx('crashlit', { volume: 0.55, rate: 1.15 });
-            this.spawnSparks(actor.sample, actor.lat, 8, 6);
-            // Crash if landing severely tilted from a big jump!
-            if (Math.abs(actor.lean) >= 0.78 && impactVel > 13) {
-              this.triggerCrash(actor, 0.7, 'WIPEOUT ON LANDING!');
-            }
-          }
-        }
-      }
+  integrateMotorcyclePhysics(r, ctrl, topMul = 1.0) {
+    const smp = this.sampleInfoAt(r.sample);
+    const nextSmp = this.sampleInfoAt(r.sample + 1);
+
+    if (r.nitroTicks > 0) r.nitroTicks -= 1;
+    if (r.hitSparkTimer > 0) r.hitSparkTimer -= 1;
+    if (r.staggerTimer <= 0 && r.stamina < r.maxStamina) {
+      r.stamina = Math.min(r.maxStamina, r.stamina + (r.isPlayer ? 0.04 : 0.015));
     }
-  }
 
-  checkWallAndSceneryCollision(r, pose) {
-    // 1. Building / Cliff outer wall crash or scrape
-    const leftWallX = -pose.left - pose.shL;
-    const rightWallX = pose.right + pose.shR;
+    const nitroBoost = r.nitroTicks > 0 ? 1.26 : 1.0;
+    const maxMph = r.stats.topMph * topMul * nitroBoost;
 
-    if (pose.hasLeftWall && r.lat < leftWallX + 38) {
-      if (r.speedMph > 48 || Math.abs(r.latVel) > 9) {
-        this.triggerCrash(r, 0.9, r.isPlayer ? 'SLAMMED BUILDING!' : `${r.name.toUpperCase()} HIT WALL!`);
-        return;
-      }
-      r.lat = leftWallX + 40;
-      r.latVel = Math.abs(r.latVel) * 0.4 + 3;
-      r.speedMph *= 0.82;
-    } else if (pose.hasRightWall && r.lat > rightWallX - 38) {
-      if (r.speedMph > 48 || Math.abs(r.latVel) > 9) {
-        this.triggerCrash(r, 0.9, r.isPlayer ? 'SLAMMED BUILDING!' : `${r.name.toUpperCase()} HIT WALL!`);
-        return;
-      }
-      r.lat = rightWallX - 40;
-      r.latVel = -Math.abs(r.latVel) * 0.4 - 3;
-      r.speedMph *= 0.82;
+    const offRoadLeft = r.lat < -smp.left;
+    const offRoadRight = r.lat > smp.right;
+    r.offRoad = offRoadLeft || offRoadRight;
+    r.skidding = Boolean(ctrl.brake && r.speedMph > 30);
+
+    // 1. Throttle / Brake / Slope / Dirt Drag (bike.cpp)
+    if (ctrl.throttle && r.airY <= 1) {
+      const ratio = r.speedMph / Math.max(1, maxMph);
+      const torqueCurve = Math.max(0.16, 1.08 - ratio * 0.82);
+      r.speedMph += r.stats.accel * torqueCurve * (r.nitroTicks > 0 ? 1.85 : 1.0);
     } else {
-      // Clamp extreme off-road excursion
-      r.lat = clamp(r.lat, leftWallX - 450, rightWallX + 450);
+      r.speedMph -= 0.19 + (r.speedMph / 190) * 0.24;
     }
 
-    // 2. Solid roadside trees / signposts / poles
-    const sIdx = Math.floor(r.sample);
-    const objs = this.courseRenderer.objectsBySample[sIdx];
-    if (objs && r.airY < 60) {
-      for (let i = 0; i < objs.length; i++) {
-        const [, oLat, , , , solid] = objs[i];
-        if (!solid) continue;
-        if (Math.abs(r.lat - oLat) < 68 && r.speedMph > 36) {
-          this.triggerCrash(r, 0.85, r.isPlayer ? 'ROADSIDE CRASH!' : `${r.name.toUpperCase()} WRECKED!`);
+    if (ctrl.brake && r.airY <= 1) {
+      r.speedMph -= 1.45;
+    }
+
+    r.speedMph -= smp.rise * 0.0018;
+    if (r.offRoad && r.airY <= 1) {
+      r.speedMph -= 0.44 + r.speedMph * 0.0065;
+    }
+    r.speedMph = Math.max(0, Math.min(maxMph + 14, r.speedMph));
+
+    // 2. 6-Speed Gearbox & Analog Tachometer RPM (bike.cpp::update_engine_rpm)
+    const speedRatio = r.speedMph / Math.max(1, r.stats.topMph);
+    let newGear = 1;
+    for (let g = 1; g <= 6; g++) {
+      if (speedRatio >= GEAR_THRESHOLDS[g - 1]) newGear = g;
+    }
+    r.gear = newGear;
+    const gLow = GEAR_THRESHOLDS[newGear - 1];
+    const gHigh = GEAR_THRESHOLDS[newGear];
+    const inGearFrac = Math.max(0, Math.min(1, (speedRatio - gLow) / Math.max(0.12, gHigh - gLow)));
+    const targetRpm =
+      r.airY > 4 && ctrl.throttle
+        ? 0.96
+        : 0.20 + inGearFrac * 0.72 + (r.nitroTicks > 0 ? 0.08 : 0);
+    r.rpmNorm += (targetRpm - r.rpmNorm) * 0.24;
+
+    // 3. Progressive Lean & Exact race.cpp Centrifugal Curve Sweep!
+    const steerAuthority = r.staggerTimer > 0 ? 0.12 : Math.min(1.0, 0.24 + r.speedMph / 42);
+    const effSteer = r.staggerTimer > 0 ? 0 : ctrl.steer;
+    if (Math.abs(effSteer) > 0.04) {
+      r.lean += (effSteer - r.lean) * 0.14 * steerAuthority;
+    } else if (r.staggerTimer <= 0) {
+      r.lean *= 0.84;
+      if (Math.abs(r.lean) < 0.01) r.lean = 0;
+    }
+    r.lean = Math.max(-1, Math.min(1, r.lean));
+
+    const ds = r.speedMph * 0.001526;
+    const centrifugalPush = -smp.bend * ds * 0.58;
+    const leanLatDrive = r.lean * r.stats.steerRate * steerAuthority * (r.offRoad ? 0.75 : 1.0);
+
+    r.shoveVel = (r.shoveVel || 0) * 0.90;
+    if (Math.abs(r.shoveVel) < 0.05) r.shoveVel = 0;
+    r.latVel = r.latVel * 0.78 + leanLatDrive * 0.30;
+    r.lat += r.latVel + r.shoveVel + centrifugalPush;
+
+    // 4. Advance Forward & Hilltop Air Launches!
+    r.sample += ds;
+    const slopeDrop = smp.rise - nextSmp.rise;
+    if (r.airY <= 0 && slopeDrop > 30 && r.speedMph > 68) {
+      r.airVel = Math.min(18, (slopeDrop - 24) * 0.16 * (r.speedMph / 95));
+      r.airY = 2;
+    }
+
+    if (r.airY > 0 || r.airVel > 0) {
+      r.airY += r.airVel;
+      r.airVel -= 0.78;
+      if (r.airY <= 0) {
+        const hardImpact = r.airVel < -11;
+        r.airY = 0;
+        r.airVel = 0;
+        if (r.isPlayer) {
+          this.audio.playSfx('bounce', { volume: hardImpact ? 0.85 : 0.62 });
+        }
+        if (hardImpact && Math.abs(r.lean) > 0.82) {
+          this.triggerCrash(r, r.speedMph * 0.65, r.lean > 0 ? 1 : -1, 'BAD LANDING!');
           return;
         }
       }
     }
-  }
 
-  // ==================== CRASH, DOWNED BIKE RAMPS & SPRINTING ON FOOT ====================
+    // 5. Roadside Buildings, Cliffs & Pacific Highway Drop-Offs
+    const wallLeft = -(smp.left + smp.shL);
+    const wallRight = smp.right + smp.shR;
+    const prevSmp = this.sampleInfoAt(r.sample - 1);
+    const exposedCornerL = smp.hasWallL && !prevSmp.hasWallL;
+    const exposedCornerR = smp.hasWallR && !prevSmp.hasWallR;
 
-  triggerCrash(r, severity = 0.8, calloutText = '') {
-    if (r.state !== 'riding') return;
-
-    const pan = clamp((r.lat - this.player.lat) / 500, -1, 1);
-    const distSamples = Math.abs(r.sample - this.player.sample);
-    if (distSamples < 28) {
-      const sfx = severity > 0.85 ? 'crashhar' : severity > 0.55 ? 'crashmed' : 'crashlit';
-      this.audio.playSfx(sfx, { volume: r.isPlayer ? 0.95 : 0.72, pan });
-      this.audio.playSfx('ridersli', { volume: r.isPlayer ? 0.65 : 0.4, pan });
-      this.audio.playSfx(r.female ? 'gruntf2_' : 'gruntm2_', { volume: 0.8, pan });
-    }
-
-    this.spawnSparks(r.sample, r.lat, 30, 12, '#ffae42');
-    if (calloutText && distSamples < 24) {
-      this.spawnCallout(r.sample, r.lat, calloutText, r.isPlayer ? '#ff6432' : '#ffff40');
-    }
-
-    // Bike condition damage
-    const dmg = (14 + r.speedMph * 0.16) * severity;
-    r.bikeCond = Math.max(0, r.bikeCond - dmg);
-
-    // Spawn separate physical downed motorcycle sliding down the road!
-    const bikeSlideDist = clamp(2.2 + (r.speedMph / 45) * 2.6, 2.0, 8.5);
-    const db = {
-      ownerId: r.id,
-      remap: r.remap,
-      active: true,
-      sliding: true,
-      sample: r.sample + 0.6,
-      targetSample: Math.min(this.finishSample + 20, r.sample + bikeSlideDist),
-      lat: clamp(r.lat + (Math.random() - 0.5) * 160, -420, 420),
-      mirror: Math.random() < 0.5,
-      rampCooldown: 0
-    };
-    this.downedBikes.push(db);
-    r.downedBike = db;
-
-    // Launch rider body tumbling separately
-    r.state = 'crashing';
-    r.stateTicks = 52;
-    r.airY = 18;
-    r.airVel = 9 + Math.min(11, r.speedMph * 0.08);
-    r.crashSampleVel = Math.min(0.32, r.speedMph * MPH_TO_SAMPLES_PER_TICK * 0.72);
-    r.latVel = clamp(r.latVel * 0.6 + (Math.random() - 0.5) * 8, -14, 14);
-    r.speedMph = 0;
-    r.attackCode = 0;
-    r.attackTicks = 0;
-
-    // Check total bike wreck for player
-    if (r.isPlayer && r.bikeCond <= 0) {
-      r.state = 'wrecked';
-      this.showBanner('WRECKED!', '#ff3b2f', 110);
-      this.endStatus = 'wrecked';
-      this.endDelayTicks = 95;
-    }
-  }
-
-  stepCrashedRider(r) {
-    if (r.state === 'wrecked' || r.state === 'busted') {
-      this.integrateAir(r);
-      return;
-    }
-
-    if (r.state === 'crashing') {
-      r.sample += r.crashSampleVel || 0;
-      r.crashSampleVel = (r.crashSampleVel || 0) * 0.94;
-      r.lat += r.latVel;
-      r.latVel *= 0.9;
-      const pose = this.courseRenderer.samplePose(r.sample);
-      r.lat = clamp(r.lat, -pose.left - pose.shL + 30, pose.right + pose.shR - 30);
-      this.integrateAir(r);
-
-      r.stateTicks--;
-      if (r.stateTicks <= 0 && r.airY <= 0) {
-        r.state = 'getting_up';
-        r.stateTicks = 22;
-      }
-      return;
-    }
-
-    if (r.state === 'getting_up') {
-      r.stateTicks--;
-      if (r.stateTicks <= 0) {
-        r.state = 'running';
-        r.stateTicks = 0;
-      }
-      return;
-    }
-
-    if (r.state === 'running') {
-      const db = r.downedBike;
-      if (!db || !db.active) {
-        this.remountRider(r);
+    if (smp.hasWallL && r.lat < wallLeft + 18) {
+      if ((exposedCornerL && r.speedMph > 45) || (r.speedMph > 52 && Math.abs(r.latVel + (r.shoveVel || 0)) >= 9.0)) {
+        this.triggerCrash(r, r.speedMph * 0.78, 1, 'HIT WALL!');
         return;
       }
-
-      // Sprint on foot (anim 38!) directly toward the downed motorcycle!
-      const dS = db.sample - r.sample;
-      const dLat = db.lat - r.lat;
-      const distWorld = Math.hypot(dS * SAMPLE_LEN, dLat);
-
-      if (distWorld < 58) {
-        r.state = 'remounting';
-        r.stateTicks = 24;
+      r.lat = wallLeft + 22;
+      r.latVel = Math.max(3.5, Math.abs(r.latVel) * 0.55);
+      r.shoveVel = 0;
+      r.speedMph *= 0.88;
+      r.hitSparkTimer = 5;
+      r.lastHitSide = -1;
+      if (r.isPlayer && this.ticks % 10 === 0) this.audio.playSfx('crashlit', { volume: 0.48 });
+    } else if (smp.hasWallR && r.lat > wallRight - 18) {
+      if ((exposedCornerR && r.speedMph > 45) || (r.speedMph > 52 && Math.abs(r.latVel + (r.shoveVel || 0)) >= 9.0)) {
+        this.triggerCrash(r, r.speedMph * 0.78, -1, 'HIT WALL!');
         return;
       }
+      r.lat = wallRight - 22;
+      r.latVel = -Math.max(3.5, Math.abs(r.latVel) * 0.55);
+      r.shoveVel = 0;
+      r.speedMph *= 0.88;
+      r.hitSparkTimer = 5;
+      r.lastHitSide = 1;
+      if (r.isPlayer && this.ticks % 10 === 0) this.audio.playSfx('crashlit', { volume: 0.48 });
+    }
 
-      const runSpeedWorld = r.isPlayer ? 9.5 : 8.2; // brisk sprint back to bike
-      const stepWorld = Math.min(distWorld, runSpeedWorld);
-      const nx = (dS * SAMPLE_LEN) / distWorld;
-      const ny = dLat / distWorld;
-      r.sample += (nx * stepWorld) / SAMPLE_LEN;
-      r.lat += ny * stepWorld;
-      r.runHeading = Math.atan2(ny, nx);
-      r.stateTicks++;
+    if (smp.coastalDropL && r.lat < wallLeft - 120) {
+      this.triggerCrash(r, 48, 1, 'OVER THE CLIFF!');
+      return;
+    }
 
-      if (r.isPlayer && r.stateTicks % 14 === 0) {
-        this.audio.playSfx('footstep', { volume: 0.5, rate: 1.05 });
+    const maxExcursion = Math.max(smp.left, smp.right) + 380;
+    r.lat = Math.max(-maxExcursion, Math.min(maxExcursion, r.lat));
+
+    if (this.checkWorldHazards(r)) return;
+    this.stepAttackAndAnim(r);
+
+    if (!r.finished && r.sample >= this.finishSample) {
+      r.finished = true;
+      r.finishTick = this.ticks;
+    }
+  }
+
+  // ==================== OG MELEE COMBAT, WEAPON SNATCH & BOOT KICK SHOVE ====================
+
+  startAttack(r, type, side) {
+    r.attackType = type;
+    r.attackSide = side < 0 ? -1 : 1;
+    r.attackPhase = 'windup';
+    r.attackTimer = 0;
+    r.hitDone = false;
+
+    if (r.isPlayer) {
+      const sfx = r.weapon === 2 ? 'swishcha' : 'swishgen';
+      this.audio.playSfx(sfx, { volume: 0.74 });
+    }
+  }
+
+  stepAttackAndAnim(r) {
+    if (r.staggerTimer > 0) {
+      r.staggerTimer -= 1;
+      r.animId = 5;
+      r.animStep = r.staggerTimer > 8 ? 0 : 1;
+      r.forceMirror = r.lastHitSide < 0;
+      return;
+    }
+
+    if (r.attackPhase !== 'idle') {
+      r.attackTimer += 1;
+      const isKick = r.attackType === 'kick';
+      const isWeapon = r.attackType === 'weapon' && r.weapon > 0;
+
+      if (isKick) {
+        r.animId = r.attackSide > 0 ? 26 : 27;
+        r.forceMirror = null;
+      } else if (isWeapon) {
+        r.animId = r.weapon === 1 ? (r.attackSide > 0 ? 10 : 12) : r.attackSide > 0 ? 16 : 18;
+        r.forceMirror = null;
+      } else {
+        r.animId = r.attackSide > 0 ? 22 : 24;
+        r.forceMirror = r.attackSide < 0;
+      }
+
+      const seq = this.assets.bikersMeta?.riderAnims?.[r.animId] || [{ dur: 8 }, { dur: 8 }];
+      const totalTicks = Math.max(10, seq.length * 4);
+      r.animStep = Math.min(seq.length - 1, Math.floor((r.attackTimer / totalTicks) * seq.length));
+
+      const strikeTick = Math.max(4, Math.floor(totalTicks * 0.48));
+      if (r.attackTimer >= strikeTick && !r.hitDone) {
+        r.attackPhase = 'strike';
+        r.hitDone = true;
+        this.resolveCombatHit(r);
+      }
+
+      if (r.attackTimer >= totalTicks) {
+        r.attackPhase = 'idle';
+        r.attackType = null;
+        r.forceMirror = null;
       }
       return;
     }
 
-    if (r.state === 'remounting') {
-      r.stateTicks--;
-      if (r.stateTicks <= 0) {
-        this.remountRider(r);
-      }
+    r.forceMirror = null;
+    if (r.airY > 14) {
+      r.animId = 4;
+      r.animStep = 0;
+    } else if (r.nitroTicks > 0 || r.speedMph > r.stats.topMph * 0.92) {
+      r.animId = 3;
+      r.animStep = 0;
+    } else {
+      r.animId = 2;
+      r.animStep = 0;
     }
   }
 
-  remountRider(r) {
-    if (r.downedBike) {
-      r.sample = r.downedBike.sample;
-      r.lat = r.downedBike.lat;
-      r.downedBike.active = false;
-      r.downedBike = null;
-    }
-    r.state = 'riding';
-    r.stamina = Math.max(r.maxStamina * 0.75, r.stamina);
-    r.lean = 0;
-    r.latVel = 0;
-    r.airY = 0;
-    r.airVel = 0;
-    r.speedMph = 18;
-  }
-
-  stepDownedBikes() {
-    for (let i = this.downedBikes.length - 1; i >= 0; i--) {
-      const db = this.downedBikes[i];
-      if (!db.active) {
-        this.downedBikes.splice(i, 1);
-        continue;
-      }
-      if (db.rampCooldown > 0) db.rampCooldown--;
-      if (db.sliding) {
-        db.sample += 0.16;
-        if (db.sample >= db.targetSample) {
-          db.sample = db.targetSample;
-          db.sliding = false;
-        }
-      }
-
-      // SIGNATURE OG MECHANIC: Downed motorcycles on the road act as physical launch ramps!
-      for (const r of this.riders) {
-        if (r.state !== 'riding' || r.id === db.ownerId || r.airY > 35 || db.rampCooldown > 0) continue;
-        if (Math.abs(r.sample - db.sample) < 0.95 && Math.abs(r.lat - db.lat) < 96 && r.speedMph > 22) {
-          db.rampCooldown = 28;
-          const pan = clamp((db.lat - this.player.lat) / 500, -1, 1);
-          if (Math.abs(r.sample - this.player.sample) < 25) {
-            this.audio.playSfx('bounce', { volume: r.isPlayer ? 0.95 : 0.65, rate: 1.0, pan });
-            this.audio.playSfx('crashlit', { volume: r.isPlayer ? 0.6 : 0.4, rate: 1.2, pan });
-          }
-          this.spawnSparks(db.sample, db.lat, 16, 10, '#66e6ff');
-
-          // Launch bike airborne off the downed motorcycle!
-          r.airY = 14;
-          r.airVel = clamp(10.5 + r.speedMph * 0.085, 11, 23);
-          r.wobble = (Math.random() - 0.5) * 5;
-
-          if (r.isPlayer) {
-            if (Math.abs(r.lean) > 0.76) {
-              this.triggerCrash(r, 0.75, 'RAMP FLIP!');
-            } else {
-              this.showBanner('DOWNED-BIKE RAMP JUMP!', '#66e6ff', 60);
-              this.spawnCallout(r.sample, r.lat, 'AIRBORNE!', '#66e6ff');
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ==================== COMBAT, WEAPON SNATCHING, KICK SHOVES & CLIPPING FALLEN RIDERS ====================
-
-  findClosestCombatTarget(attacker, maxSampleDiff, maxLatDiff) {
+  findAdjacentTarget(attacker) {
     let best = null;
-    let bestScore = Infinity;
+    let bestDist = 999;
     for (const other of this.riders) {
-      if (other === attacker || other.state !== 'riding') continue;
+      if (other === attacker || other.state !== 'riding' || other.finished) continue;
       const ds = Math.abs(other.sample - attacker.sample);
-      const dl = Math.abs(other.lat - attacker.lat);
-      if (ds <= maxSampleDiff && dl <= maxLatDiff) {
-        const s = ds * 180 + dl;
-        if (s < bestScore) {
-          bestScore = s;
+      const dLat = Math.abs(other.lat - attacker.lat);
+      if (ds < 1.65 && dLat < 185) {
+        const d = ds * 65 + dLat;
+        if (d < bestDist) {
+          bestDist = d;
           best = other;
         }
-      }
-    }
-    if (this.cop && this.cop.active && this.cop.state === 'riding') {
-      const ds = Math.abs(this.cop.sample - attacker.sample);
-      const dl = Math.abs(this.cop.lat - attacker.lat);
-      if (ds <= maxSampleDiff && dl <= maxLatDiff && ds * 180 + dl < bestScore) {
-        best = this.cop;
       }
     }
     return best;
   }
 
-  stepRiderInteractions() {
-    // 1. Resolve active melee strikes (mid-swing impact window)
-    for (const attacker of this.riders) {
-      if (attacker.state !== 'riding' || attacker.attackTicks <= 0 || attacker.attackLanded) continue;
-      const progress = 1 - attacker.attackTicks / Math.max(1, attacker.attackDuration);
-      if (progress < 0.32 || progress > 0.76) continue;
+  resolveCombatHit(attacker) {
+    const reachLat = attacker.attackType === 'weapon' && attacker.weapon > 0 ? 205 : 178;
 
-      // Candidate targets: riding rivals + motorcycle cop
-      const candidates = [...this.riders];
-      if (this.cop && this.cop.active && this.cop.state === 'riding') {
-        candidates.push(this.cop);
-      }
+    // 1. Check rival / player bikers
+    for (const victim of this.riders) {
+      if (victim === attacker || victim.state !== 'riding' || victim.finished) continue;
+      if (victim.isPlayer && victim.staggerTimer > 6) continue;
+      const ds = Math.abs(victim.sample - attacker.sample);
+      const relLat = victim.lat - attacker.lat;
+      if (ds > 1.7) continue;
+      if (attacker.attackSide > 0 && (relLat < -28 || relLat > reachLat)) continue;
+      if (attacker.attackSide < 0 && (relLat > 28 || relLat < -reachLat)) continue;
 
-      for (const target of candidates) {
-        if (target === attacker || target.state !== 'riding') continue;
-        const dSample = Math.abs(target.sample - attacker.sample);
-        if (dSample > 1.35) continue;
-
-        const relLat = target.lat - attacker.lat;
-        const onSide = attacker.attackSide < 0 ? relLat < 35 && relLat > -210 : relLat > -35 && relLat < 210;
-        if (!onSide) continue;
-
-        // HIT LANDED!
-        attacker.attackLanded = true;
-        this.applyCombatImpact(attacker, target);
-        break;
-      }
-    }
-
-    // 2. Bike-to-bike rub & bike-vs-sprinting-rider-on-foot clipping!
-    for (let i = 0; i < this.riders.length; i++) {
-      const a = this.riders[i];
-      if (a.state !== 'riding') continue;
-
-      for (let j = 0; j < this.riders.length; j++) {
-        if (i === j) continue;
-        const b = this.riders[j];
-
-        // SIGNATURE OG MECHANIC: Clipping a crashed rider who is sprinting on foot back to their bike!
-        if (b.state === 'running' || b.state === 'getting_up') {
-          if (Math.abs(a.sample - b.sample) < 0.95 && Math.abs(a.lat - b.lat) < 88 && a.speedMph > 16) {
-            const pan = clamp((b.lat - this.player.lat) / 500, -1, 1);
-            if (Math.abs(a.sample - this.player.sample) < 28) {
-              this.audio.playSfx('bounce', { volume: 0.85, pan });
-              this.audio.playSfx(b.female ? 'gruntf3_' : 'gruntm3_', { volume: 0.9, pan });
-            }
-            // Bowl the running rider back into a comical ragdoll tumble!
-            b.state = 'crashing';
-            b.stateTicks = 44;
-            b.airY = 16;
-            b.airVel = 11.5;
-            b.crashSampleVel = a.speedMph * MPH_TO_SAMPLES_PER_TICK * 0.45;
-            b.latVel = (b.lat >= a.lat ? 1 : -1) * 11;
-            // Minor wobble & slight speed dip on the hitting bike
-            a.speedMph *= 0.92;
-            a.wobble = (a.lat >= b.lat ? 1 : -1) * 7.5;
-            this.spawnSparks(b.sample, b.lat, 55, 7, '#ffff60');
-            if (a.isPlayer) {
-              this.showBanner(`CLIPPED ${b.name.toUpperCase()} ON FOOT!`, '#ffff40', 60);
-              this.spawnCallout(b.sample, b.lat, 'BOWLED OVER!', '#ffff40');
-            }
-            continue;
-          }
-        }
-
-        // Bike-to-bike handlebar rub
-        if (b.state === 'riding' && j > i) {
-          if (Math.abs(a.sample - b.sample) < 0.72 && Math.abs(a.lat - b.lat) < 76) {
-            const push = a.lat < b.lat ? -4.5 : 4.5;
-            a.lat += push;
-            b.lat -= push;
-            a.latVel += push * 0.35;
-            b.latVel -= push * 0.35;
-          }
+      // TIMED WEAPON SNATCH: Bare-knuckle punch while armed rival is swinging steals their weapon!
+      if (
+        attacker.attackType === 'punch' &&
+        attacker.weapon === 0 &&
+        victim.weapon > 0 &&
+        victim.attackPhase !== 'idle'
+      ) {
+        const stolenName = victim.weapon === 2 ? 'CHAIN' : 'CLUB';
+        attacker.weapon = victim.weapon;
+        victim.weapon = 0;
+        victim.attackPhase = 'idle';
+        if (attacker.isPlayer || victim.isPlayer) {
+          this.audio.playSfx(attacker.female ? 'f_yeah' : 'm_yeah', { volume: 0.9 });
+          this.showBanner(
+            attacker.isPlayer ? `SNATCHED ${stolenName}!` : `${attacker.name.toUpperCase()} STOLE YOUR ${stolenName}!`,
+            '#ffcf40',
+            80
+          );
         }
       }
-    }
-  }
 
-  applyCombatImpact(attacker, target) {
-    const isCopTarget = target === this.cop;
-    const pan = clamp((target.lat - this.player.lat) / 500, -1, 1);
-    const nearCamera = Math.abs(target.sample - this.player.sample) < 26;
-    const dir = attacker.attackSide; // -1 shoves target left, +1 shoves target right
+      let dmg = 18;
+      let latShove = attacker.attackSide * 4.8;
+      let hitSfx = 'punchhea';
 
-    // Check TIMED WEAPON SNATCH: unarmed punch hits armed rival during their swing windup!
-    if (
-      attacker.attackType === 'punch' &&
-      attacker.weapon === 0 &&
-      !isCopTarget &&
-      target.weapon > 0 &&
-      target.attackTicks > 6
-    ) {
-      const stolen = target.weapon;
-      attacker.weapon = stolen;
-      target.weapon = 0;
-      target.attackTicks = 0;
-      target.attackCode = 0;
-      if (attacker.isPlayer) {
-        this.audio.playSfx(attacker.female ? 'f_yeah' : 'm_yeah', { volume: 0.95 });
-        const wLabel = stolen === 2 ? 'CHAIN' : 'CLUB';
-        this.showBanner(`SNATCHED ${target.name.toUpperCase()}'S ${wLabel}!`, '#66ff88', 85);
-        this.spawnCallout(target.sample, target.lat, `STOLE ${wLabel}!`, '#66ff88');
-      }
-    }
-
-    // Play authentic weapon/kick/punch impact SFX & grunt
-    if (nearCamera) {
       if (attacker.attackType === 'kick') {
-        this.audio.playSfx('kick_mw4', { volume: 0.95, pan });
-      } else if (attacker.attackType === 'chain') {
-        this.audio.playSfx('chainimp', { volume: 0.95, pan });
-      } else if (attacker.attackType === 'club') {
-        this.audio.playSfx('clubimpa', { volume: 0.95, pan });
-      } else {
-        this.audio.playSfx('punchhea', { volume: 0.9, pan });
+        dmg = 22;
+        // MASSIVE LATERAL SHOVE: kicks launch rival bikes sideways across lanes into oncoming cars & walls!
+        latShove = attacker.attackSide * 21.0;
+        hitSfx = 'kick_mw4';
+      } else if (attacker.attackType === 'weapon' && attacker.weapon === 1) {
+        dmg = 36;
+        latShove = attacker.attackSide * 7.8;
+        hitSfx = 'clubimpa';
+      } else if (attacker.attackType === 'weapon' && attacker.weapon === 2) {
+        dmg = 40;
+        latShove = attacker.attackSide * 7.2;
+        hitSfx = 'chainimp';
       }
-      this.audio.playSfx(target.female ? 'gruntf1_' : 'gruntm1_', { volume: 0.85, pan });
-    }
 
-    this.spawnSparks(
-      target.sample,
-      target.lat,
-      92,
-      attacker.attackType === 'punch' ? 6 : 11,
-      attacker.attackType === 'kick' ? '#ff9933' : '#ffff60'
-    );
-
-    // SIGNATURE OG MECHANIC: Boot Kick physically shoves bike laterally across lanes!
-    if (attacker.attackType === 'kick') {
-      const shoveImpulse = attacker.isPlayer ? 34 : 22;
-      target.latVel += dir * shoveImpulse;
-      attacker.latVel -= dir * 5.5; // Newton recoil on kicker
-      target.wobble = dir * 8;
-      target.stamina = Math.max(0, target.stamina - 18);
-      if (!isCopTarget) {
-        target.staggerCode = dir < 0 ? 5 : 6;
-        target.staggerTicks = 26;
-        target.hitFlashTicks = 12;
+      if (victim.isPlayer) {
+        dmg = Math.round(dmg * 0.48);
+        latShove *= 0.65;
       }
-      if (attacker.isPlayer) {
-        this.spawnCallout(target.sample, target.lat, 'KICK SHOVE!', '#ffae42');
+
+      victim.stamina = Math.max(0, victim.stamina - dmg);
+      victim.shoveVel = (victim.shoveVel || 0) + latShove;
+      victim.lean = Math.max(-1, Math.min(1, victim.lean + attacker.attackSide * 0.48));
+      victim.staggerTimer = attacker.attackType === 'kick' ? 22 : 16;
+      victim.hitSparkTimer = 10;
+      victim.lastHitSide = -attacker.attackSide;
+
+      if (attacker.isPlayer || victim.isPlayer) {
+        this.audio.playSfx(hitSfx, { volume: 0.9 });
+        this.playGrunt(victim.female);
+        const rival = attacker.isPlayer ? victim : attacker;
+        this.focusedRival = rival;
+        this.focusedTimer = 260;
       }
-    } else {
-      // Melee stamina damage (Fists / Club / Chain)
-      const baseDmg =
-        attacker.attackType === 'chain' ? 48 : attacker.attackType === 'club' ? 40 : 24;
-      const dmg = attacker.isPlayer ? baseDmg : baseDmg * 0.58;
-      target.stamina = Math.max(0, target.stamina - dmg);
-      target.latVel += dir * (attacker.attackType === 'punch' ? 8 : 13);
-      target.wobble = dir * 6.5;
 
-      if (!isCopTarget) {
-        target.staggerCode = dir < 0 ? 5 : 6;
-        target.staggerTicks = 20;
-        target.hitFlashTicks = 14;
-      }
-    }
-
-    // Provoke cop if player attacks cop or brawls right in front of cop!
-    if (
-      attacker.isPlayer &&
-      this.cop &&
-      this.cop.active &&
-      (isCopTarget || Math.abs(this.cop.sample - attacker.sample) < 18)
-    ) {
-      this.cop.chasing = true;
-    }
-
-    // Stamina KO -> Full Crash!
-    if (target.stamina <= 0) {
-      if (isCopTarget) {
-        this.crashCop("KO'D OFFICER " + this.cop.name.toUpperCase() + '!');
-      } else {
-        const msg = attacker.isPlayer
-          ? `KNOCKED OUT ${target.name.toUpperCase()}!`
-          : `${target.name.toUpperCase()} KO'D!`;
+      if (victim.stamina <= 0) {
         if (attacker.isPlayer) {
           this.audio.playSfx(attacker.female ? 'f_yeah' : 'm_yeah', { volume: 0.9 });
-          this.showBanner(msg, '#ffff40', 75);
+          this.showBanner(`KO'D ${victim.name.toUpperCase()}!`, '#66ff66', 80);
         }
-        this.triggerCrash(target, 0.95, 'KO!');
+        this.triggerCrash(victim, Math.max(40, victim.speedMph * 0.72), attacker.attackSide, 'KNOCKED OUT!');
+      }
+      return;
+    }
+
+    // 2. Check Motorcycle Police Officer!
+    for (const cop of this.cops) {
+      if (!cop.active) continue;
+      const ds = Math.abs(cop.sample - attacker.sample);
+      const relLat = cop.lat - attacker.lat;
+      if (ds <= 1.7 && Math.abs(relLat) <= reachLat && Math.sign(relLat || attacker.attackSide) === attacker.attackSide) {
+        const dmg = attacker.attackType === 'weapon' && attacker.weapon > 0 ? 38 : 22;
+        cop.stamina -= dmg;
+        cop.latVel += attacker.attackSide * (attacker.attackType === 'kick' ? 19.0 : 6.0);
+        this.audio.playSfx(attacker.attackType === 'kick' ? 'kick_mw4' : 'clubimpa', { volume: 0.9 });
+        if (cop.stamina <= 0) {
+          cop.active = false;
+          cop.chasing = false;
+          this.audio.playSfx('crashhar', { volume: 0.9 });
+          if (attacker.isPlayer) this.showBanner(`WRECKED OFFICER ${cop.name.toUpperCase()}!`, '#66ff66', 90);
+        }
+        return;
       }
     }
   }
 
-  // ==================== TRAFFIC CARS & PEDESTRIANS ====================
+  // ==================== TRAFFIC, PEDESTRIANS, FALLEN RIDERS & DOWNED-BIKE RAMPS ====================
+
+  checkWorldHazards(r) {
+    // 1. Traffic Cars / Trucks / Taxis
+    for (const car of this.traffic) {
+      if (!car.active) continue;
+      const ds = Math.abs(car.sample - r.sample);
+      const dLat = Math.abs(car.lat - r.lat);
+      if (ds < 1.18 && dLat < 94 && r.airY < 32) {
+        const closingMph = car.dir < 0 ? r.speedMph + car.mph : Math.abs(r.speedMph - car.mph);
+        if (closingMph > 30) {
+          if (r.isPlayer) {
+            this.audio.playSfx('crashhar', { volume: 0.92 });
+          }
+          this.triggerCrash(r, closingMph * 0.85, r.lat < car.lat ? -1 : 1, 'SMASHED TRAFFIC!');
+          return true;
+        }
+        r.speedMph = Math.min(r.speedMph, car.mph * 0.82);
+        r.latVel += r.lat < car.lat ? -8.5 : 8.5;
+        if (r.isPlayer) this.audio.playSfx('crashlit', { volume: 0.65 });
+      } else if (r.isPlayer && ds < 4.8 && dLat < 130 && car.dir < 0 && car.hornCooldown <= 0) {
+        car.hornCooldown = 140;
+        this.audio.playSfx('bmwlong', { volume: 0.56 });
+      }
+    }
+
+    // 2. Hittable Jaywalking & Shoulder Pedestrians!
+    const pedsMeta = this.assets.worldMeta?.pedestrians || [];
+    for (const ped of this.pedestrians) {
+      if (!ped.active || ped.state !== 'walk') continue;
+      const ds = Math.abs(ped.sample - r.sample);
+      const dLat = Math.abs(ped.lat - r.lat);
+      if (ds < 0.95 && dLat < 64 && r.airY < 26) {
+        ped.state = 'hit';
+        ped.airVel = 10.0 + r.speedMph * 0.055;
+        ped.airY = 4;
+        ped.vx = (ped.lat >= r.lat ? 1 : -1) * 5.6;
+        r.speedMph *= 0.91;
+        r.latVel += (r.lat < ped.lat ? -1 : 1) * 3.0;
+        r.staggerTimer = 8;
+
+        if (r.isPlayer) {
+          this.audio.playSfx('punchhea', { volume: 0.78 });
+          const pDesc = pedsMeta[ped.type % Math.max(1, pedsMeta.length)];
+          const voiceId = pDesc?.voices?.[0];
+          if (voiceId !== undefined && voiceId >= 0) {
+            this.audio.playPedVoice(voiceId, Math.max(-1, Math.min(1, (ped.lat - r.lat) / 250)));
+          } else {
+            this.audio.playSfx(ped.type % 2 === 0 ? 'af1_eek' : 'jm_aiie', { volume: 0.85 });
+          }
+        }
+      }
+    }
+
+    // 3. Hittable Sprinting Crashed Riders running on foot back to their bikes!
+    for (const other of this.riders) {
+      if (other === r || other.state !== 'running') continue;
+      const ds = Math.abs(other.sample - r.sample);
+      const dLat = Math.abs(other.lat - r.lat);
+      if (ds < 0.95 && dLat < 60 && r.airY < 26) {
+        other.state = 'crashing';
+        other.stateTimer = 46;
+        other.airVel = 9.2;
+        other.airY = 5;
+        other.speedMph = r.speedMph * 0.36;
+        r.speedMph *= 0.92;
+        if (r.isPlayer || other.isPlayer) {
+          this.audio.playSfx('punchhea', { volume: 0.82 });
+          this.playGrunt(other.female);
+          if (r.isPlayer) this.showBanner(`CLIPPED ${other.name.toUpperCase()}!`, '#ffcf40', 60);
+        }
+      }
+    }
+
+    // 4. Downed Motorcycles Lying on Pavement -> PHYSICAL STUNT LAUNCH RAMPS!
+    for (const db of this.downedBikes) {
+      if (!db.active || db.ownerId === r.id) continue;
+      const ds = Math.abs(db.sample - r.sample);
+      const dLat = Math.abs(db.lat - r.lat);
+      if (ds < 0.98 && dLat < 68 && r.airY < 14) {
+        if (Math.abs(r.lean) < 0.68 && r.speedMph > 22) {
+          r.airVel = 14.0 + r.speedMph * 0.088;
+          r.airY = 8;
+          db.spinStep = (db.spinStep + 3) % 8;
+          if (r.isPlayer) {
+            this.audio.playSfx('bounce', { volume: 0.92 });
+            this.showBanner('BIKE RAMP JUMP!', '#66e6ff', 58);
+          }
+        } else {
+          this.triggerCrash(r, r.speedMph * 0.72, r.lean >= 0 ? 1 : -1, 'PILED UP!');
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // ==================== CRASH, DETACHED BIKE SLIDE & ON-FOOT SPRINT ====================
+
+  triggerCrash(r, severityMph, sideDir, reason = '') {
+    if (r.state !== 'riding') return;
+
+    const bikeDmg = Math.max(12, Math.floor(severityMph * 0.28));
+    r.bikeCond = Math.max(0, r.bikeCond - bikeDmg);
+    r.attackPhase = 'idle';
+    r.forceMirror = null;
+
+    if (r.isPlayer) {
+      const crashSfx = severityMph > 95 ? 'crashhar' : severityMph > 55 ? 'crashmed' : 'crashlit';
+      this.audio.playSfx(crashSfx, { volume: 0.92 });
+      this.audio.playSfx('ridersli', { volume: 0.72 });
+      this.playGrunt(r.female);
+      if (reason) this.showBanner(reason, '#ff6432', 80);
+    }
+
+    const db = {
+      active: true,
+      ownerId: r.id,
+      colorIdx: r.colorIdx,
+      sample: r.sample + 0.55,
+      lat: r.lat - sideDir * 28,
+      mph: Math.min(105, r.speedMph * 0.86),
+      latVel: -sideDir * 4.2,
+      spinStep: 0
+    };
+    this.downedBikes.push(db);
+    r.downedBikeRef = db;
+
+    r.state = 'crashing';
+    r.stateTimer = 58;
+    r.airVel = Math.min(14, 5.5 + severityMph * 0.065);
+    r.airY = 4;
+    r.latVel = sideDir * 6.5;
+    r.speedMph = Math.min(92, r.speedMph * 0.74);
+    r.animId = 0;
+  }
+
+  stepNonRidingState(r) {
+    const smp = this.sampleInfoAt(r.sample);
+
+    if (r.state === 'crashing') {
+      r.stateTimer -= 1;
+      r.sample += r.speedMph * 0.0014;
+      r.speedMph *= 0.92;
+      r.lat += r.latVel;
+      r.latVel *= 0.90;
+      r.lat = Math.max(-(smp.left + 140), Math.min(smp.right + 140, r.lat));
+
+      if (r.airY > 0 || r.airVel > 0) {
+        r.airY += r.airVel;
+        r.airVel -= 0.82;
+        if (r.airY <= 0) {
+          r.airY = 0;
+          r.airVel = Math.abs(r.airVel) > 4 ? Math.abs(r.airVel) * 0.35 : 0;
+        }
+      }
+
+      if (r.stateTimer <= 0 && r.speedMph < 5) {
+        if (r.bikeCond <= 0) {
+          r.state = 'wrecked';
+          if (!r.isPlayer && r.downedBikeRef) r.downedBikeRef.active = false;
+          return;
+        }
+        if (r.isPlayer) {
+          for (const cop of this.cops) {
+            if (cop.active && Math.abs(cop.sample - r.sample) < 10) {
+              r.state = 'busted';
+              this.audio.playSfx('sirenfst', { volume: 0.88 });
+              return;
+            }
+          }
+        }
+        r.state = 'running';
+        r.animId = 38;
+        r.animStep = 0;
+      }
+      return;
+    }
+
+    if (r.state === 'running') {
+      const db = r.downedBikeRef;
+      if (!db || !db.active) {
+        r.state = 'riding';
+        r.speedMph = 20;
+        r.stamina = Math.max(50, r.stamina);
+        return;
+      }
+
+      const dSample = db.sample - r.sample;
+      const dLat = db.lat - r.lat;
+      r.runCompass = Math.atan2(dLat * 0.01, dSample);
+
+      r.animId = 38;
+      r.animTick += 1;
+      if (r.animTick >= 5) {
+        r.animTick = 0;
+        r.animStep = (r.animStep + 1) % 6;
+        if (r.isPlayer && r.animStep % 3 === 0) {
+          this.audio.playSfx('footstep', { volume: 0.45 });
+        }
+      }
+
+      r.sample += Math.sign(dSample) * Math.min(Math.abs(dSample), 0.088);
+      r.lat += Math.sign(dLat) * Math.min(Math.abs(dLat), 6.2);
+
+      if (Math.abs(dSample) < 0.4 && Math.abs(dLat) < 28) {
+        db.active = false;
+        r.downedBikeRef = null;
+        r.state = 'riding';
+        r.speedMph = 22;
+        r.lean = 0;
+        r.latVel = 0;
+        r.stamina = Math.max(60, r.stamina);
+        const remountSmp = this.sampleInfoAt(r.sample);
+        r.lat = Math.max(-(remountSmp.left - 28), Math.min(remountSmp.right - 28, r.lat));
+      }
+    }
+  }
+
+  stepDownedBikes() {
+    for (const db of this.downedBikes) {
+      if (!db.active) continue;
+      if (db.mph > 0.5) {
+        const smp = this.sampleInfoAt(db.sample);
+        db.sample += db.mph * 0.00145;
+        db.mph *= 0.935;
+        db.lat += db.latVel;
+        db.latVel *= 0.90;
+        db.lat = Math.max(-(smp.left + 85), Math.min(smp.right + 85, db.lat));
+        if (this.ticks % 4 === 0) db.spinStep = (db.spinStep + 1) % 8;
+      }
+    }
+  }
 
   stepTraffic() {
     for (const car of this.traffic) {
-      if (car.hitCooldown > 0) car.hitCooldown--;
-      car.sample += car.speedMph * MPH_TO_SAMPLES_PER_TICK;
+      if (!car.active) continue;
+      if (car.hornCooldown > 0) car.hornCooldown -= 1;
 
-      // Wrap far-behind oncoming cars ahead so long races always have live traffic
-      if (car.oncoming && car.sample < this.player.sample - 35) {
-        const respawnS = Math.min(this.finishSample + 45, this.player.sample + 95 + (car.id % 35));
-        if (respawnS < this.finishSample + 40) {
-          const pose = this.courseRenderer.samplePose(respawnS);
-          car.sample = respawnS;
-          car.lat = -pose.left * 0.48;
-        }
-      }
+      car.sample += car.dir * car.mph * 0.00145;
+      const smp = this.sampleInfoAt(car.sample);
+      const targetMag = Math.max(110, (car.dir < 0 ? smp.left : smp.right) * 0.52);
+      const desiredLat = car.dir < 0 ? -targetMag : targetMag;
+      car.lat += (desiredLat - car.lat) * 0.14;
 
-      if (car.hitCooldown > 0) continue;
-
-      // Check rider-vs-car collisions (including rivals boot-kicked into oncoming traffic!)
-      const actors = [...this.riders];
-      if (this.cop && this.cop.active && this.cop.state === 'riding') actors.push(this.cop);
-
-      for (const r of actors) {
-        if (r.state !== 'riding' || r.airY > 95) continue;
-        if (Math.abs(r.sample - car.sample) < 1.35 && Math.abs(r.lat - car.lat) < 118) {
-          car.hitCooldown = 24;
-          const relSpeed = Math.abs(r.speedMph - car.speedMph);
-          if (relSpeed > 44 || car.oncoming) {
-            if (r === this.cop) {
-              this.crashCop('COP SLAMMED ONCOMING CAR!');
-            } else {
-              const callout = r.isPlayer ? 'TRAFFIC WRECK!' : `${r.name.toUpperCase()} HIT A CAR!`;
-              if (!r.isPlayer && Math.abs(r.sample - this.player.sample) < 20) {
-                this.showBanner(callout, '#ffae42', 65);
-              }
-              this.triggerCrash(r, 1.0, callout);
-            }
-          } else {
-            // Glancing bumper sideswipe
-            const push = r.lat >= car.lat ? 18 : -18;
-            r.latVel += push;
-            r.speedMph *= 0.78;
-            this.spawnSparks(r.sample, (r.lat + car.lat) * 0.5, 50, 8);
-            if (r.isPlayer) this.audio.playSfx('crashlit', { volume: 0.75 });
-          }
-        }
+      if (car.sample < this.startSample + 8) {
+        car.sample = Math.min(this.finishSample - 12, this.player.sample + 54);
+      } else if (car.sample > this.finishSample - 6) {
+        car.sample = Math.max(this.startSample + 14, this.player.sample - 22);
       }
     }
   }
 
   stepPedestrians() {
-    const looks = this.assets.worldMeta?.pedestrians || [];
-
     for (const ped of this.pedestrians) {
       if (!ped.active) continue;
-      const distToPlayer = Math.abs(ped.sample - this.player.sample);
-      if (distToPlayer > 95) continue;
-
-      ped.animTick++;
-
       if (ped.state === 'hit') {
-        ped.sample += ped.sampleVel;
-        ped.sampleVel *= 0.94;
-        ped.lat += ped.latVel;
-        ped.latVel *= 0.92;
-        if (ped.airY > 0 || ped.airVel > 0) {
-          ped.airY += ped.airVel;
-          ped.airVel -= 0.95;
-          ped.spinAngle += 0.24;
-          if (ped.airY <= 0) {
-            ped.airY = 0;
-            ped.airVel = 0;
-            ped.spinAngle = Math.PI * 0.5; // tumbled flat, comical stars!
-          }
-        }
+        ped.airY += ped.airVel;
+        ped.airVel -= 0.72;
+        ped.lat += ped.vx;
+        ped.spinAngle += 0.36;
+        if (ped.airY <= 0) ped.active = false;
         continue;
       }
 
-      // Walking across road or along shoulder
-      const pose = this.courseRenderer.samplePose(ped.sample);
-      if (ped.dir !== 0) {
-        ped.lat += ped.dir * 2.15;
-        const limitL = -pose.left - pose.shL * 0.55;
-        const limitR = pose.right + pose.shR * 0.55;
-        if (ped.lat <= limitL) {
-          ped.lat = limitL;
-          ped.dir = 1;
-        } else if (ped.lat >= limitR) {
-          ped.lat = limitR;
-          ped.dir = -1;
-        }
-      } else if (ped.walkAlong !== 0) {
-        ped.sample += ped.walkAlong * 0.008;
-      }
-
-      // SIGNATURE OG MECHANIC: Clipping walking pedestrians!
-      for (const r of this.riders) {
-        if (r.state !== 'riding' || r.airY > 85) continue;
-        if (Math.abs(r.sample - ped.sample) < 0.95 && Math.abs(r.lat - ped.lat) < 88 && r.speedMph > 12) {
-          ped.state = 'hit';
-          ped.airY = 14;
-          ped.airVel = clamp(9 + r.speedMph * 0.09, 10, 22);
-          ped.sampleVel = r.speedMph * MPH_TO_SAMPLES_PER_TICK * 0.58;
-          ped.latVel = (ped.lat >= r.lat ? 1 : -1) * (8 + Math.random() * 6);
-          ped.spinAngle = 0.2;
-
-          // Minor bike wobble & slight speed dip (never crashes you unless totaled!)
-          r.speedMph *= 0.93;
-          r.wobble = (r.lat >= ped.lat ? 1 : -1) * 6.5;
-
-          const pan = clamp((ped.lat - this.player.lat) / 500, -1, 1);
-          if (Math.abs(ped.sample - this.player.sample) < 28) {
-            const look = looks[ped.lookId];
-            const voiceId = look?.voices?.[0] ?? 101;
-            this.audio.playPedVoice(voiceId, pan);
-            this.audio.playSfx('bounce', { volume: 0.72, rate: 1.12, pan });
-          }
-          if (r.isPlayer) {
-            this.spawnCallout(ped.sample, ped.lat, 'OOPS!', '#ffdd55');
-          }
-          break;
+      if (ped.moving) {
+        ped.lat += ped.vx;
+        if (Math.abs(ped.lat) > ped.edgeLimit) ped.vx = -ped.vx;
+        ped.animTick += 1;
+        if (ped.animTick >= 6) {
+          ped.animTick = 0;
+          ped.animStep = (ped.animStep + 1) % 6;
         }
       }
     }
   }
 
-  // ==================== MOTORCYCLE POLICE OFFICER (LOCOP.DAT) ====================
-
-  crashCop(bannerMsg) {
-    const cop = this.cop;
-    if (!cop || cop.state !== 'riding') return;
-    cop.state = 'crashing';
-    cop.stateTicks = 120;
-    cop.chasing = false;
-    cop.airY = 16;
-    cop.airVel = 12;
-    this.audio.playSfx('crashhar', { volume: 0.9 });
-    this.spawnSparks(cop.sample, cop.lat, 40, 14, '#66aaff');
-    if (bannerMsg) this.showBanner(bannerMsg, '#66e6ff', 80);
-  }
-
-  stepCop() {
-    const cop = this.cop;
-    if (!cop) return;
-
-    if (!cop.active) {
-      if (cop.respawnCooldown > 0) {
-        cop.respawnCooldown--;
-        if (cop.respawnCooldown === 0 && this.player.sample < this.finishSample - 120) {
-          cop.active = true;
-          cop.state = 'riding';
-          cop.chasing = false;
-          cop.stamina = cop.maxStamina;
-          cop.sample = this.player.sample + 95;
-          cop.lat = 210;
-          cop.speedMph = 58;
+  stepRiderToRiderCollisions() {
+    const n = this.riders.length;
+    for (let i = 0; i < n; i++) {
+      const a = this.riders[i];
+      if (a.state !== 'riding') continue;
+      for (let j = i + 1; j < n; j++) {
+        const b = this.riders[j];
+        if (b.state !== 'riding') continue;
+        const ds = Math.abs(a.sample - b.sample);
+        const dLat = a.lat - b.lat;
+        if (ds < 0.75 && Math.abs(dLat) < 56) {
+          const push = dLat >= 0 ? 3.6 : -3.6;
+          a.lat += push;
+          b.lat -= push;
+          a.latVel += push * 0.55;
+          b.latVel -= push * 0.55;
+          if ((a.isPlayer || b.isPlayer) && this.ticks % 12 === 0) {
+            this.audio.playSfx('crashlit', { volume: 0.38 });
+          }
         }
       }
-      return;
     }
+  }
 
-    if (cop.state === 'crashing') {
-      this.integrateAir(cop);
-      cop.stateTicks--;
-      if (cop.stateTicks <= 0) {
-        cop.active = false;
-        cop.respawnCooldown = 600; // next officer patrols 10s later down the road
-      }
-      return;
-    }
-
+  stepPolice() {
     const p = this.player;
-    const dS = p.sample - cop.sample;
+    this.activeCop = null;
 
-    // Trigger pursuit when player blasts past cop at high speed!
-    if (!cop.chasing && Math.abs(dS) < 12 && p.speedMph > 55) {
-      cop.chasing = true;
-      this.showBanner(`POLICE PURSUIT!`, '#ff4444', 65);
-    }
-
-    // Give up if player escapes way ahead
-    if (cop.chasing && Math.abs(dS) > 75) {
-      cop.chasing = false;
-      cop.active = false;
-      cop.respawnCooldown = 520;
-      return;
-    }
-
-    if (cop.chasing) {
-      // If player crashed and is on foot/ground, cop pulls up and BUSTS player!
-      if (p.state === 'crashing' || p.state === 'getting_up' || p.state === 'running') {
-        const targetSpeed = dS > 1.5 ? 85 : dS < -1.5 ? 20 : 12;
-        cop.speedMph += (targetSpeed - cop.speedMph) * 0.08;
-        cop.lat += (p.lat - cop.lat) * 0.07;
-        cop.sample += cop.speedMph * MPH_TO_SAMPLES_PER_TICK;
-
-        if (Math.abs(cop.sample - p.sample) < 1.8 && Math.abs(cop.lat - p.lat) < 140 && p.airY <= 2) {
-          p.state = 'busted';
-          cop.attackCode = 43;
-          this.audio.playSfx('sirenfst', { volume: 0.7 });
-          this.showBanner('BUSTED!', '#ff3333', 110);
-          this.endStatus = 'busted';
-          this.endDelayTicks = 95;
-        }
-        return;
+    for (const cop of this.cops) {
+      if (!cop.active && Math.abs(p.sample - cop.spawnSample) < 9 && !cop.chasing && cop.stamina > 0) {
+        cop.active = true;
+        cop.chasing = true;
+        cop.sample = Math.max(this.startSample + 5, p.sample - 4.5);
+        cop.lat = p.lat + (p.lat > 0 ? -135 : 135);
+        cop.mph = Math.max(60, p.speedMph * 0.95);
+        this.showBanner(`POLICE PURSUIT: OFFICER ${cop.name.toUpperCase()}!`, '#ff5555', 80);
       }
 
-      // High-speed chase alongside player + nightstick swings!
-      const desiredS = p.sample - 0.35;
-      const chaseTop = p.topMph * 1.04;
-      const targetSpeed = clamp(p.speedMph + (desiredS - cop.sample) * 9, 35, chaseTop);
-      cop.speedMph += (targetSpeed - cop.speedMph) * 0.065;
+      if (!cop.active) continue;
+      this.activeCop = cop;
 
-      const sideOffset = cop.lat >= p.lat ? 105 : -105;
-      const latErr = p.lat + sideOffset - cop.lat;
-      cop.lean = clamp(latErr * 0.005, -0.75, 0.75);
-      cop.lat += cop.lean * 9.0 + cop.latVel;
-      cop.latVel *= 0.86;
-      cop.sample += cop.speedMph * MPH_TO_SAMPLES_PER_TICK;
-      this.integrateAir(cop);
+      const targetMph = p.state === 'riding' ? Math.min(186, p.stats.topMph * 1.04) : 34;
+      cop.mph += (targetMph - cop.mph) * 0.055;
+      const ds = cop.mph * 0.001526;
+      cop.sample += ds;
 
-      const pose = this.courseRenderer.samplePose(cop.sample);
+      const smp = this.sampleInfoAt(cop.sample);
+      const desiredLat = p.lat + (cop.lat >= p.lat ? 62 : -62);
+      const latErr = desiredLat - cop.lat;
+      cop.lean = Math.max(-1, Math.min(1, latErr * 0.02));
+      cop.latVel = cop.latVel * 0.78 + Math.max(-6.8, Math.min(6.8, latErr * 0.14));
+      cop.lat += cop.latVel - smp.bend * ds * 0.58;
+      cop.lat = Math.max(-(smp.left - 24), Math.min(smp.right - 24, cop.lat));
+
+      if (cop.attackCooldown > 0) cop.attackCooldown -= 1;
       if (
-        (pose.hasLeftWall && cop.lat < -pose.left - pose.shL + 35) ||
-        (pose.hasRightWall && cop.lat > pose.right + pose.shR - 35)
+        p.state === 'riding' &&
+        cop.attackCooldown <= 0 &&
+        Math.abs(cop.sample - p.sample) < 1.4 &&
+        Math.abs(cop.lat - p.lat) < 135
       ) {
-        this.crashCop('COP HIT BUILDING!');
-        return;
+        cop.attackCooldown = 54;
+        const pushDir = p.lat >= cop.lat ? 1 : -1;
+        p.stamina = Math.max(0, p.stamina - 22);
+        p.latVel += pushDir * 11.5;
+        p.staggerTimer = 14;
+        p.hitSparkTimer = 10;
+        this.audio.playSfx('clubimpa', { volume: 0.9 });
+        this.playGrunt(p.female);
+
+        if (p.stamina <= 0) {
+          this.triggerCrash(p, p.speedMph * 0.7, pushDir, 'BUSTED BY POLICE!');
+          p.state = 'busted';
+        }
       }
 
-      if (cop.attackTicks > 0) {
-        cop.attackTicks--;
-        if (cop.attackTicks === 10 && Math.abs(cop.sample - p.sample) < 1.25 && Math.abs(cop.lat - p.lat) < 155) {
-          const dir = p.lat < cop.lat ? -1 : 1;
-          this.audio.playSfx('clubimpa', { volume: 0.9 });
-          this.spawnSparks(p.sample, p.lat, 90, 9, '#ff6666');
-          p.stamina = Math.max(0, p.stamina - 22);
-          p.latVel += dir * 14;
-          p.staggerCode = dir < 0 ? 5 : 6;
-          p.staggerTicks = 18;
-          if (p.stamina <= 0) {
-            this.triggerCrash(p, 0.9, 'CLUBBED BY COP!');
-          }
-        }
-        if (cop.attackTicks === 0) cop.attackCode = 0;
-      } else if (cop.swingCooldown > 0) {
-        cop.swingCooldown--;
-      } else if (Math.abs(cop.sample - p.sample) < 1.25 && Math.abs(cop.lat - p.lat) < 165) {
-        cop.attackCode = p.lat < cop.lat ? 16 : 17;
-        cop.attackTicks = 24;
-        cop.swingCooldown = 48;
-        this.audio.playSfx('swishgen', { volume: 0.7 });
+      if (p.sample - cop.sample > 56) {
+        cop.active = false;
+        cop.chasing = false;
+        this.showBanner('OUTRAN THE COPS!', '#66ff66', 65);
       }
-    } else {
-      // Peaceful patrol cruise ahead
-      cop.speedMph = 54;
-      cop.sample += cop.speedMph * MPH_TO_SAMPLES_PER_TICK;
-      const pose = this.courseRenderer.samplePose(cop.sample);
-      cop.lat = pose.right * 0.58;
     }
   }
 
-  // ==================== STANDINGS, CAMERA & AUDIO ====================
-
-  updateStandingsAndNearest() {
+  updateStandings() {
     const sorted = [...this.riders].sort((a, b) => {
-      if (a.finished && b.finished) return a.finishTicks - b.finishTicks;
+      if (a.finished && b.finished) return a.finishTick - b.finishTick;
       if (a.finished) return -1;
       if (b.finished) return 1;
       return b.sample - a.sample;
     });
-    this.playerPlace = sorted.findIndex((r) => r.isPlayer) + 1;
+    sorted.forEach((r, idx) => {
+      r.place = idx + 1;
+    });
+    this.playerPlace = this.player.place;
 
-    // Nearest opponent (preferring riders ahead within 2x distance, matching hud.cpp::nearest_opponent)
-    let aheadR = null;
-    let aheadD = Infinity;
-    let behindR = null;
-    let behindD = Infinity;
-    for (let i = 1; i < this.riders.length; i++) {
-      const r = this.riders[i];
-      const d = r.sample - this.player.sample;
-      if (d >= 0 && d < aheadD) {
-        aheadD = d;
-        aheadR = r;
-      } else if (d < 0 && -d < behindD) {
-        behindD = -d;
-        behindR = r;
+    // Nearest rival for right-side Cockpit HUD Stamina & Gap readout
+    if (this.focusedRival && this.focusedRival.state === 'riding') {
+      this.nearestRival = this.focusedRival;
+    } else {
+      let best = null;
+      let bestD = Infinity;
+      for (const r of this.riders) {
+        if (r.isPlayer) continue;
+        const d = Math.abs(r.sample - this.player.sample);
+        if (d < bestD) {
+          bestD = d;
+          best = r;
+        }
       }
+      this.nearestRival = best;
     }
-    this.nearestRival = behindD * 2 < aheadD ? behindR : aheadR;
   }
 
-  updateCamera() {
+  updateCameraAndAudio(prevPlayerSample) {
     const p = this.player;
-    const pullBack = p.finished || p.state === 'wrecked' || p.state === 'busted' ? 2.6 : 1.48;
-    this.cameraSample = p.sample - pullBack;
-    // Trail laterally at 75% of player offset (clamped within ±200 world units like race.cpp::update_camera!)
-    const targetLat = p.lat - clamp(p.lat * 0.25, -195, 195);
-    this.cameraLat += (targetLat - this.cameraLat) * 0.28;
-    const lift = p.finished || p.state === 'wrecked' || p.state === 'busted' ? 225 : 150;
-    this.cameraHeight += (lift - this.cameraHeight) * 0.12;
-  }
+    const smp = this.sampleInfoAt(p.sample);
 
-  updateAudioLoops(skidding, offRoad, inTunnel = false) {
-    const p = this.player;
+    this.cameraSample = Math.max(1, p.sample - 1.55);
+    this.cameraLat += (p.lat * 0.84 - this.cameraLat) * 0.24;
+    this.cameraHeightOffset += (p.airY * 0.55 - this.cameraHeightOffset) * 0.25;
+
+    const dSample = p.sample - prevPlayerSample;
+    if (Math.abs(dSample) < 2.0) {
+      this.headingAccum += smp.bend * dSample;
+    }
+
+    // Spatial audio distances & stereo pans for AudioEngine.updateRaceLoops!
     let rivalDist = Infinity;
     let rivalPan = 0;
-    if (this.nearestRival) {
-      rivalDist = Math.hypot(
-        (this.nearestRival.sample - p.sample) * SAMPLE_LEN,
-        this.nearestRival.lat - p.lat
-      );
-      rivalPan = clamp((this.nearestRival.lat - p.lat) / 480, -1, 1);
+    for (const r of this.riders) {
+      if (r.isPlayer || r.state !== 'riding') continue;
+      const dWorld = Math.hypot((r.sample - p.sample) * 256, r.lat - p.lat);
+      if (dWorld < rivalDist) {
+        rivalDist = dWorld;
+        rivalPan = Math.max(-1, Math.min(1, (r.lat - p.lat) / 400));
+      }
     }
 
     let carDist = Infinity;
     let carPan = 0;
     let carRelSpeed = 0;
     for (const car of this.traffic) {
-      const d = Math.hypot((car.sample - p.sample) * SAMPLE_LEN, car.lat - p.lat);
-      if (d < carDist) {
-        carDist = d;
-        carPan = clamp((car.lat - p.lat) / 480, -1, 1);
-        carRelSpeed = p.speedMph - car.speedMph;
+      if (!car.active) continue;
+      const dWorld = Math.hypot((car.sample - p.sample) * 256, car.lat - p.lat);
+      if (dWorld < carDist) {
+        carDist = dWorld;
+        carPan = Math.max(-1, Math.min(1, (car.lat - p.lat) / 450));
+        carRelSpeed = car.dir < 0 ? p.speedMph + car.mph : p.speedMph - car.mph;
       }
     }
 
     let copDist = Infinity;
     let copPan = 0;
-    if (this.cop && this.cop.active) {
-      copDist = Math.hypot((this.cop.sample - p.sample) * SAMPLE_LEN, this.cop.lat - p.lat);
-      copPan = clamp((this.cop.lat - p.lat) / 480, -1, 1);
+    let copChasing = false;
+    if (this.activeCop && this.activeCop.active) {
+      copDist = Math.hypot((this.activeCop.sample - p.sample) * 256, this.activeCop.lat - p.lat);
+      copPan = Math.max(-1, Math.min(1, (this.activeCop.lat - p.lat) / 400));
+      copChasing = this.activeCop.chasing;
     }
 
     this.audio.updateRaceLoops({
-      bikeId: this.config.bikeId,
-      rpmNorm: p.state === 'riding' ? p.rpmNorm : 0.15,
+      bikeId: p.bikeId,
+      rpmNorm: p.state === 'riding' ? p.rpmNorm : 0.14,
       speedMph: p.speedMph,
-      inTunnel,
+      inTunnel: smp.tunnel,
       nitroActive: p.nitroTicks > 0,
-      skidding,
-      offRoad,
+      skidding: p.skidding,
+      offRoad: p.offRoad,
       rivalDist,
       rivalPan,
       carDist,
@@ -1509,281 +1321,64 @@ export class RaceSimulation {
       carRelSpeed,
       copDist,
       copPan,
-      copChasing: Boolean(this.cop?.chasing)
+      copChasing
     });
   }
 
-  finishAndExit(status) {
-    if (this.ended) return;
-    this.ended = true;
+  checkEndConditions() {
+    const p = this.player;
+    if (p.state === 'wrecked') {
+      this.finishRaceWithStatus('wrecked');
+    } else if (p.state === 'busted') {
+      this.finishRaceWithStatus('busted');
+    } else if (p.finished) {
+      this.finishRaceWithStatus('finished');
+    }
+  }
+
+  formatRaceTime(ticks) {
+    const totalTenths = Math.max(1, Math.floor((ticks * 10) / 60));
+    const mins = Math.floor(totalTenths / 600);
+    const secs = Math.floor((totalTenths % 600) / 10);
+    const tenths = totalTenths % 10;
+    return `${mins}:${String(secs).padStart(2, '0')}.${tenths}`;
+  }
+
+  finishRaceWithStatus(status) {
+    if (this.completed) return;
+    this.completed = true;
     this.audio.stopAllRaceLoops();
 
-    // Build full 15-rider Race Results standings table
-    const sorted = [...this.riders].sort((a, b) => {
-      if (a.finished && b.finished) return a.finishTicks - b.finishTicks;
-      if (a.finished) return -1;
-      if (b.finished) return 1;
-      return b.sample - a.sample;
-    });
-
-    const formatTime = (ticks) => {
-      const totalSec = Math.max(1, Math.floor(ticks / 60));
-      const min = Math.floor(totalSec / 60);
-      const sec = totalSec % 60;
-      const tenths = Math.floor((ticks % 60) / 6);
-      return `${min}:${String(sec).padStart(2, '0')}.${tenths}`;
-    };
-
-    const standings = sorted.map((r) => {
-      let estTicks = r.finishTicks;
-      if (!r.finished) {
-        const remSamples = Math.max(0, this.finishSample - r.sample);
-        const spd = Math.max(45, r.topMph * 0.85) * MPH_TO_SAMPLES_PER_TICK;
-        estTicks = this.ticks + Math.round(remSamples / spd);
-      }
-      const timeStr =
-        r.isPlayer && status === 'wrecked'
-          ? 'WRECKED'
-          : r.isPlayer && status === 'busted'
-            ? 'BUSTED'
-            : formatTime(estTicks);
-      return {
-        name: r.name,
-        isPlayer: r.isPlayer,
-        timeStr
-      };
-    });
-
-    const place = sorted.findIndex((r) => r.isPlayer) + 1;
-    this.onRaceEnd({
-      status,
-      place,
-      courseId: this.config.courseId,
-      playerName: this.config.playerName,
-      standings
-    });
-  }
-
-  // ==================== AUTHENTIC SPRITE FRAME RESOLVERS ====================
-
-  resolveRiderSprite(rider, camYaw, roadYaw) {
-    const bm = this.assets.bikersMeta;
-    if (!bm) return null;
-
-    let frameIdx = 3;
-    let mirror = false;
-
-    if (rider.state === 'crashing' || rider.state === 'wrecked') {
-      const seq = bm.riderAnims[28] || [];
-      const step = Math.min(seq.length - 1, Math.floor((52 - rider.stateTicks) / 7));
-      const grp = seq[Math.max(0, step)]?.r?.[0] ?? 94;
-      const cell = bm.riderViews[grp]?.[0] || [241, 0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.state === 'busted') {
-      const seq = bm.riderAnims[43] || [];
-      const step = Math.floor(this.ticks / 10) % Math.max(1, seq.length);
-      const grp = seq[step]?.r?.[0] ?? 149;
-      const cell = bm.riderViews[grp]?.[0] || [314, 0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.state === 'getting_up') {
-      frameIdx = 289;
-      mirror = false;
-    } else if (rider.state === 'running') {
-      // 8-angle animated sprinting cycle (anim 38, groups 139..144)
-      const seq = bm.riderAnims[38] || [];
-      const step = Math.floor(rider.stateTicks / 5) % Math.max(1, seq.length);
-      const grp = seq[step]?.r?.[0] ?? 139;
-      const viewRow = bm.riderViews[grp] || [[297, 0]];
-      const normAngle = (((rider.runHeading / (Math.PI * 2)) % 1) + 1) % 1;
-      const sub = Math.floor(normAngle * viewRow.length) % viewRow.length;
-      const cell = viewRow[sub] || viewRow[0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.state === 'remounting') {
-      const cell = bm.riderViews[147]?.[Math.min(4, Math.floor((24 - rider.stateTicks) / 5))] || [310, 0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.attackTicks > 0 && rider.attackCode > 0) {
-      // Melee / Club / Chain / Kick swing sequence!
-      const seq = bm.riderAnims[rider.attackCode] || [];
-      const elapsed = Math.max(0, rider.attackDuration - rider.attackTicks);
-      let acc = 0;
-      let chosen = seq[0];
-      for (const s of seq) {
-        acc += s.dur || 7;
-        chosen = s;
-        if (elapsed < acc) break;
-      }
-      const grp = chosen?.r?.[0] ?? 84;
-      const viewRow = bm.riderViews[grp] || [[176, 0]];
-      const midIdx = Math.floor(viewRow.length / 2);
-      const cell = viewRow[midIdx] || viewRow[0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.staggerTicks > 0 && rider.staggerCode > 0) {
-      const seq = bm.riderAnims[rider.staggerCode] || [];
-      const grp = seq[0]?.r?.[0] ?? 22;
-      const viewRow = bm.riderViews[grp] || [[42, 0]];
-      const cell = viewRow[Math.floor(viewRow.length / 2)];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.airY > 10) {
-      // Wheelie / Ramp Jump pose (anim 4 -> view[21])!
-      const viewRow = bm.riderViews[21] || [[41, 0]];
-      const leanSlot = clamp(2 + Math.round(rider.lean * 2), 0, viewRow.length - 1);
-      const cell = viewRow[leanSlot];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else if (rider.speedMph < 4 && this.countdownTicks > 0) {
-      // Stopped at starting grid with foot down (anim 8 -> view[27])
-      const cell = bm.riderViews[27]?.[2] || [47, 0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else {
-      // Normal riding (view[2..10] across 9 lean angles) or Nitro high-speed tuck (view[12..20])!
-      const tucked = rider.nitroTicks > 0 || rider.speedMph > rider.topMph * 0.96;
-      const baseGroup = tucked ? 16 : 6; // upright group (6 normal, 16 tucked)
-      const leanSteps = clamp(Math.round(rider.lean * 3.4), -4, 4);
-      const grp = baseGroup + leanSteps;
-      const viewRow = bm.riderViews[grp] || bm.riderViews[6];
-
-      const relYaw = wrapAngle(roadYaw - camYaw);
-      const yawIdx = clamp(3 + Math.round(relYaw * 2.2), 0, viewRow.length - 1);
-      const cell = viewRow[yawIdx] || viewRow[3];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    }
-
-    const canvas = this.assets.getRiderCanvas(rider.remap, frameIdx);
-    if (!canvas) return null;
-    const shadowCanvas = this.assets.getRiderShadowCanvas(frameIdx);
-    const meta = bm.riderFrames[frameIdx];
-    // riderFrames hotspots are stored in 320x240 logical coords (half of hibob 2x pixel dims)
-    const hx = meta ? meta[0] * 2 : canvas.width * 0.5;
-    const hy = meta ? meta[1] * 2 : canvas.height * 0.85;
-
-    return { canvas, shadowCanvas, hx, hy, mirror };
-  }
-
-  resolveDownedBikeSprite(db) {
-    const bm = this.assets.bikersMeta;
-    if (!bm) return null;
-    const slidingFrames = [319, 320, 321, 322];
-    const frameIdx = db.sliding ? slidingFrames[Math.floor(this.ticks / 4) % 4] : 321;
-    const canvas = this.assets.getRiderCanvas(db.remap, frameIdx);
-    if (!canvas) return null;
-    return { canvas };
-  }
-
-  resolveCopSprite(cop, camYaw, roadYaw) {
-    const bm = this.assets.bikersMeta;
-    if (!bm) return null;
-
-    let frameIdx = 3;
-    let mirror = false;
-
-    if (cop.state === 'crashing') {
-      frameIdx = 37;
-    } else if (cop.attackCode === 43) {
-      frameIdx = 35;
-    } else if (cop.attackTicks > 0 && (cop.attackCode === 16 || cop.attackCode === 17)) {
-      const seq = bm.copAnims[cop.attackCode] || [];
-      const grp = seq[Math.min(seq.length - 1, Math.floor((24 - cop.attackTicks) / 8))]?.r?.[0] ?? 3;
-      const viewRow = bm.copViews[grp] || [[8, 0]];
-      const cell = viewRow[3] || viewRow[0];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    } else {
-      const viewRow = bm.copViews[1] || [[3, 0]];
-      const relYaw = wrapAngle(roadYaw - camYaw + cop.lean * 0.45);
-      const idx = clamp(3 + Math.round(relYaw * 2.5), 0, viewRow.length - 1);
-      const cell = viewRow[idx] || viewRow[3];
-      frameIdx = cell[0];
-      mirror = Boolean(cell[1] & 1);
-    }
-
-    const canvas = this.assets.getCopCanvas(frameIdx);
-    if (!canvas) return null;
-    const shadowCanvas = this.assets.getCopShadowCanvas(frameIdx);
-    const meta = bm.copFrames[frameIdx];
-    const hx = meta ? meta[0] : canvas.width * 0.5;
-    const hy = meta ? meta[1] : canvas.height * 0.88;
-    return { canvas, shadowCanvas, hx, hy, mirror };
-  }
-
-  resolveCarSprite(car, camYaw, roadYaw, zc) {
-    const courseCars = this.assets.carsMeta?.courses?.[this.config.courseKey];
-    if (!courseCars || !courseCars.length) return null;
-    const def = courseCars[car.typeIdx % courseCars.length];
-    if (!def?.frames?.length || !def?.views?.length) return null;
-
-    // Always use views[2] (full-resolution frame coords matching cars_atlas.png pixel dimensions!)
-    const lodGroup = def.views[2] || def.views[0];
-    const worldScale = 5.1;
-
-    // Include lateral perspective angle (atan2(latDiff, depth)) just like actor_render.cpp::actor_angles!
-    const latAngle = Math.atan2(car.lat - this.cameraLat, Math.max(180, zc));
-    const carHeading = car.oncoming ? roadYaw + Math.PI : roadYaw;
-    const rel = wrapAngle(carHeading - camYaw - latAngle);
-    const slot = clamp(4 + Math.round((rel / Math.PI) * 4), 0, lodGroup.length - 1);
-    const [fIdx, flags] = lodGroup[slot] || lodGroup[4] || [0, 0];
-    const fr = def.frames[fIdx] || def.frames[0];
-    const [rectIdx, rawHx, rawHy, logicalW, logicalH] = fr;
-    const canvas = this.assets.getCarCanvas(rectIdx);
-    if (!canvas) return null;
-
-    const sx = logicalW > 0 ? canvas.width / logicalW : 1;
-    const sy = logicalH > 0 ? canvas.height / logicalH : 1;
-
-    return {
-      canvas,
-      hx: rawHx * sx,
-      hy: rawHy * sy,
-      mirror: Boolean(flags & 1),
-      worldScale
-    };
-  }
-
-  resolvePedSprite(ped) {
-    const looks = this.assets.worldMeta?.pedestrians;
-    if (!looks || !looks.length) return null;
-    const look = looks[ped.lookId % looks.length];
-    if (!look?.frames?.length) return null;
-
-    let frameEntry = look.frames[0];
-    let mirror = ped.dir < 0;
-
-    if (ped.state === 'hit') {
-      // Knockdown / flying frames (anim 3 in look.anims)
-      const hitSeq = look.anims?.[3];
-      if (hitSeq && hitSeq.length) {
-        const step = Math.min(hitSeq.length - 1, Math.floor((ped.animTick % 24) / 4));
-        const vGrp = hitSeq[step]?.r?.[0] ?? 0;
-        const cell = look.views?.[vGrp]?.[0];
-        if (cell && look.frames[cell[0]]) {
-          frameEntry = look.frames[cell[0]];
+    const standings = [...this.riders]
+      .sort((a, b) => a.place - b.place)
+      .map((r) => {
+        let estTicks = r.finishTick;
+        if (!estTicks) {
+          const rem = Math.max(1, this.finishSample - r.sample);
+          const avgDs = Math.max(0.08, r.stats.topMph * 0.78 * 0.001526);
+          estTicks = this.ticks + Math.floor(rem / avgDs);
         }
-      }
-    } else {
-      // Walking animation (anim 0 in look.anims)
-      const walkSeq = look.anims?.[0];
-      if (walkSeq && walkSeq.length) {
-        const step = Math.floor(ped.animTick / 6) % walkSeq.length;
-        const vGrp = walkSeq[step]?.r?.[0] ?? 0;
-        const cell = look.views?.[vGrp]?.[0];
-        if (cell && look.frames[cell[0]]) {
-          frameEntry = look.frames[cell[0]];
-        }
-      } else {
-        frameEntry = look.frames[Math.floor(ped.animTick / 7) % look.frames.length];
-      }
-    }
+        return {
+          name: r.name,
+          isPlayer: r.isPlayer,
+          place: r.place,
+          timeStr:
+            r.state === 'wrecked'
+              ? 'WRECKED'
+              : r.state === 'busted'
+                ? 'BUSTED'
+                : this.formatRaceTime(estTicks)
+        };
+      });
 
-    const [texId, hx, hy, w, h] = frameEntry;
-    const canvas = this.assets.getWorldCanvas(texId);
-    if (!canvas) return null;
-    return { canvas, hx, hy, w, h, mirror };
+    setTimeout(() => {
+      this.onRaceComplete({
+        status,
+        place: this.player.place,
+        playerName: this.player.name,
+        courseId: this.config.courseId,
+        standings
+      });
+    }, 900);
   }
 }

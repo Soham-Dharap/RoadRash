@@ -27,6 +27,7 @@ let frontend = null;
 let raceSim = null;
 let activeDashImg = null;
 let lastRaceConfig = null;
+let lastGasTapMs = 0;
 
 const inputState = {
   gas: false,
@@ -55,7 +56,6 @@ async function startRace(raceConfig) {
     activeDashImg = dashImg;
     courseRenderer.buildCourse(course, horizon, raceConfig.level);
 
-    // Start energetic Grunge rock track (GRUNGE1..5) for the race!
     const grungeTrack = MUSIC_TRACKS[raceConfig.courseId % 5];
     audio.playMusicTrack(grungeTrack);
 
@@ -79,6 +79,13 @@ async function startRace(raceConfig) {
 
 function setKeyFlag(code, down) {
   if (code === 'ArrowUp' || code === 'KeyW') {
+    if (down && !inputState.gas && appState === 'racing' && raceSim && !raceSim.paused) {
+      const now = performance.now();
+      if (now - lastGasTapMs < 250) {
+        raceSim.triggerNitro();
+      }
+      lastGasTapMs = now;
+    }
     inputState.gas = down;
     return true;
   }
@@ -103,7 +110,7 @@ window.addEventListener('keydown', (e) => {
     toggleFullscreen();
     return;
   }
-  if (e.code === 'KeyM' && !e.repeat) {
+  if (e.code === 'KeyM' && !e.repeat && !(appState === 'frontend' && frontend?.editingName)) {
     audio.ensureContext();
     const next = audio.nextMusicTrack();
     btnMusic.textContent = `MUSIC: ${next}`;
@@ -149,10 +156,14 @@ window.addEventListener('keydown', (e) => {
     }
 
     if (!e.repeat) {
-      if (e.code === 'KeyZ' || e.code === 'Comma') {
+      if (e.code === 'Space' || e.code === 'Enter') {
+        // Smart OG Melee: swings Fist/Club/Chain toward closest rival/cop beside you!
+        raceSim.triggerAttack('smart', inputState);
+        e.preventDefault();
+      } else if (e.code === 'KeyZ' || e.code === 'Comma') {
         raceSim.triggerAttack('left', inputState);
         e.preventDefault();
-      } else if (e.code === 'KeyC' || e.code === 'Period' || e.code === 'Enter') {
+      } else if (e.code === 'KeyC' || e.code === 'Period') {
         raceSim.triggerAttack('right', inputState);
         e.preventDefault();
       } else if (
@@ -161,9 +172,10 @@ window.addEventListener('keydown', (e) => {
         e.code === 'ShiftLeft' ||
         e.code === 'ShiftRight'
       ) {
+        // Lateral Boot-Kick Shove across lanes!
         raceSim.triggerAttack('kick', inputState);
         e.preventDefault();
-      } else if (e.code === 'Space' || e.code === 'KeyN') {
+      } else if (e.code === 'KeyN' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
         raceSim.triggerNitro();
         e.preventDefault();
       } else if (e.code === 'F10' || e.code === 'KeyH') {
@@ -237,8 +249,7 @@ touchControlsEl.querySelectorAll('button[data-action]').forEach((btn) => {
     else if (act === 'brake') inputState.brake = down;
     else if (down && appState === 'racing' && raceSim) {
       if (act === 'punchL') {
-        const side = inputState.left ? 'left' : inputState.right ? 'right' : 'left';
-        raceSim.triggerAttack(side, inputState);
+        raceSim.triggerAttack('smart', inputState);
       } else if (act === 'kick') {
         raceSim.triggerAttack('kick', inputState);
       } else if (act === 'nitro') {
@@ -256,7 +267,6 @@ touchControlsEl.querySelectorAll('button[data-action]').forEach((btn) => {
   btn.addEventListener('pointerleave', () => setHold(false));
 });
 
-// Top toolbar buttons
 btnMusic.addEventListener('click', () => {
   audio.ensureContext();
   const on = audio.toggleMusic();
@@ -296,24 +306,28 @@ function renderBootScreen() {
     uiCtx.globalAlpha = 1;
   }
 
-  uiCtx.fillStyle = 'rgba(0, 0, 0, 0.76)';
-  uiCtx.fillRect(110, 190, 420, 108);
+  uiCtx.fillStyle = 'rgba(0, 0, 0, 0.80)';
+  uiCtx.fillRect(110, 174, 420, 134);
   uiCtx.strokeStyle = '#ff6432';
-  uiCtx.strokeRect(110.5, 190.5, 419, 107);
+  uiCtx.strokeRect(110.5, 174.5, 419, 133);
 
-  uiCtx.font = '36px RRBadloc, sans-serif';
+  uiCtx.font = '38px RRBadloc, sans-serif';
   uiCtx.textAlign = 'center';
   uiCtx.fillStyle = '#ff6432';
-  uiCtx.fillText('ROAD RASH', 320, 232);
+  uiCtx.fillText('ROAD RASH', 320, 214);
 
-  uiCtx.font = '16px RRFuturaDemi, sans-serif';
+  uiCtx.font = '20px RRBadloc, sans-serif';
+  uiCtx.fillStyle = '#ff9d2e';
+  uiCtx.fillText('Made By Soham', 320, 240);
+
+  uiCtx.font = '15px RRFuturaDemi, sans-serif';
   uiCtx.fillStyle = '#defff0';
-  uiCtx.fillText(bootStatus, 320, 256);
+  uiCtx.fillText(bootStatus, 320, 266);
 
   uiCtx.fillStyle = '#222';
-  uiCtx.fillRect(140, 270, 360, 14);
+  uiCtx.fillRect(140, 280, 360, 14);
   uiCtx.fillStyle = '#e1e180';
-  uiCtx.fillRect(140, 270, Math.round(360 * bootProgress), 14);
+  uiCtx.fillRect(140, 280, Math.round(360 * bootProgress), 14);
 }
 
 function frameLoop(nowMs) {
